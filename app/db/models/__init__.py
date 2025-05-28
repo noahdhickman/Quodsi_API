@@ -1,14 +1,11 @@
 """
 Database models package.
 
-All models inherit from BaseEntity which provides:
-- Multi-tenant architecture with tenant_id foreign key
-- Dual-key pattern (id + index_id) for performance optimization  
-- Audit fields (created_at, updated_at, is_deleted) for tracking
-- Consistent indexing strategy for tenant-scoped queries
-- Soft delete functionality for data retention
+All models inherit from BaseEntity which provides multi-tenant architecture,
+performance optimization, audit fields, and consistent patterns.
 """
 
 from .base_entity import BaseEntity
+from .tenant import Tenant
 
-__all__ = ["BaseEntity"]
+__all__ = ["BaseEntity", "Tenant"]

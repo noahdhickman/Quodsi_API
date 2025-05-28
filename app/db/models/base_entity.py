@@ -26,7 +26,8 @@ class BaseEntity(Base):
     id = Column(
         UNIQUEIDENTIFIER, 
         default=uuid.uuid4, 
-        nullable=False
+        nullable=False,
+        primary_key=True
     )
     
     # Physical ordering key (auto-incrementing integer)
