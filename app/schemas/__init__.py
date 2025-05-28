@@ -1,14 +1,16 @@
-"""
-Pydantic schemas package.
-
-Contains all request/response schemas for API validation and serialization.
-"""
-
-from .tenant import TenantCreate, TenantRead, TenantUpdate, TenantSummary
+# app/schemas/__init__.py
+from .tenant import (
+    TenantCreate, TenantRead, TenantUpdate, TenantSummary
+)
+from .user import (
+    UserBase, UserCreate, UserUpdate, UserInDB, UserResponse, 
+    UserWithTenant, UserRegistration, LoginStats
+)
 
 __all__ = [
-    "TenantCreate", 
-    "TenantRead", 
-    "TenantUpdate", 
-    "TenantSummary"
+    # Tenant schemas
+    "TenantCreate", "TenantRead", "TenantUpdate", "TenantSummary",
+    # User schemas
+    "UserBase", "UserCreate", "UserUpdate", "UserInDB", "UserResponse", 
+    "UserWithTenant", "UserRegistration", "LoginStats"
 ]

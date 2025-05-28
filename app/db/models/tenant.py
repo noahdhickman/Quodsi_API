@@ -17,11 +17,14 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
+from sqlalchemy.orm import relationship
+
 from app.db.models.base_entity import BaseEntity
 
 
 class Tenant(BaseEntity):
     __tablename__ = "tenants"
+    users = relationship("User", back_populates="tenant")
 
     # tenant_id is handled by @declared_attr in BaseEntity
     # For tenants table, it's nullable (for system tenants or special cases)
