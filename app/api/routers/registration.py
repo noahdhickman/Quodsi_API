@@ -2,15 +2,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from typing import Optional
 
 from app.db.session import get_db
-from app.services.registration_service import RegistrationService
+from app.services.registration_service import RegistrationService, get_registration_service
+from app.repositories.tenant_repository import tenant_repo
+from app.repositories.user_repository import user_repo
 from app.schemas.registration import (
     TenantRegistrationRequest, 
     UserRegistrationRequest,
     RegistrationResponse,
     TenantRegistrationResponse
 )
+from app.schemas.user import UserRegistration, UserCreate
+from app.schemas.tenant import TenantCreate
 from app.api.response_helpers import (
     create_success_response, 
     create_error_response,
@@ -34,28 +39,46 @@ async def register_tenant(
     try:
         registration_service = RegistrationService(db)
         
-        # Register tenant and admin user
-        result = registration_service.register_tenant_with_admin(
-            tenant_name=request.name,
-            domain=request.domain,
-            admin_email=request.admin_email,
-            admin_password=request.admin_password,
-            admin_display_name=request.admin_display_name
+        # Create tenant first
+        tenant_data = TenantCreate(
+            name=request.name,
+            slug=request.domain,
+            subdomain=request.domain,
+            plan_type="trial",
+            status="trial"
         )
+        
+        tenant = tenant_repo.create(db, obj_in=tenant_data)
+        
+        # Create admin user
+        user_data = {
+            "email": request.admin_email,
+            "display_name": request.admin_display_name,
+            "identity_provider": "local",
+            "identity_provider_id": request.admin_email,
+            "tenant_id": tenant.id,
+            "status": "active"
+        }
+        
+        # Create user using the repository
+        user = user_repo.create(db, obj_in=user_data, tenant_id=tenant.id)
+        
+        # Commit the transaction
+        db.commit()
         
         # Create response data
         response_data = TenantRegistrationResponse(
-            tenant_id=result.tenant.id,
-            tenant_name=result.tenant.name,
-            domain=result.tenant.domain,
-            admin_user_id=result.admin_user.id,
-            admin_email=result.admin_user.email,
+            tenant_id=tenant.id,
+            tenant_name=tenant.name,
+            domain=tenant.slug,
+            admin_user_id=user.id,
+            admin_email=user.email,
             message="Tenant and admin user registered successfully"
         )
         
         return create_success_response(
             data=response_data.dict(),
-            tenant_id=result.tenant.id
+            tenant_id=tenant.id
         )
         
     except ValueError as e:
@@ -64,11 +87,62 @@ async def register_tenant(
             message=str(e)
         )
     except IntegrityError as e:
+        db.rollback()
         return create_error_response(
             code="DUPLICATE_ERROR",
             message="Tenant domain or admin email already exists"
         )
     except Exception as e:
+        db.rollback()
+        return create_error_response(
+            code="INTERNAL_ERROR",
+            message="An unexpected error occurred during registration"
+        )
+
+@router.post("/tenant/sso", response_model=dict)
+async def register_tenant_sso(
+    request: UserRegistration,
+    db: Session = Depends(get_db)
+):
+    """
+    Register a new tenant with SSO user (alternative endpoint).
+    
+    This endpoint accepts the SSO-style registration format.
+    """
+    try:
+        registration_service = RegistrationService(db)
+        
+        # Use the existing SSO registration method
+        tenant, user = registration_service.register_user_and_tenant(request)
+        
+        # Create response data
+        response_data = TenantRegistrationResponse(
+            tenant_id=tenant.id,
+            tenant_name=tenant.name,
+            domain=tenant.slug,
+            admin_user_id=user.id,
+            admin_email=user.email,
+            message="Tenant and admin user registered successfully"
+        )
+        
+        return create_success_response(
+            data=response_data.dict(),
+            tenant_id=tenant.id
+        )
+        
+    except ValueError as e:
+        return create_error_response(
+            code="REGISTRATION_ERROR",
+            message=str(e)
+        )
+    except IntegrityError as e:
+        db.rollback()
+        return create_error_response(
+            code="DUPLICATE_ERROR",
+            message="Tenant or user already exists"
+        )
+    except Exception as e:
+        db.rollback()
         return create_error_response(
             code="INTERNAL_ERROR",
             message="An unexpected error occurred during registration"
@@ -86,16 +160,30 @@ async def register_user(
     This endpoint creates a new user within the authenticated user's tenant.
     """
     try:
-        registration_service = RegistrationService(db)
+        # Check if email is already taken in this tenant
+        existing_user = user_repo.get_by_email(db, current_user.tenant_id, request.email)
+        if existing_user:
+            return create_error_response(
+                code="DUPLICATE_ERROR",
+                message="Email already exists in this tenant",
+                tenant_id=current_user.tenant_id
+            )
         
-        # Register user in current tenant
-        user = registration_service.register_user_in_tenant(
-            tenant_id=current_user.tenant_id,
-            email=request.email,
-            password=request.password,
-            display_name=request.display_name,
-            role=request.role
-        )
+        # Create user data
+        user_data = {
+            "email": request.email,
+            "display_name": request.display_name,
+            "identity_provider": "local",
+            "identity_provider_id": request.email,
+            "tenant_id": current_user.tenant_id,
+            "status": "active"
+        }
+        
+        # Create user
+        user = user_repo.create(db, obj_in=user_data, tenant_id=current_user.tenant_id)
+        
+        # Commit the transaction
+        db.commit()
         
         # Create response data
         response_data = RegistrationResponse(
@@ -118,12 +206,14 @@ async def register_user(
             tenant_id=current_user.tenant_id
         )
     except IntegrityError as e:
+        db.rollback()
         return create_error_response(
             code="DUPLICATE_ERROR",
             message="User email already exists in this tenant",
             tenant_id=current_user.tenant_id
         )
     except Exception as e:
+        db.rollback()
         return create_error_response(
             code="INTERNAL_ERROR",
             message="An unexpected error occurred during user registration",

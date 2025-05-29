@@ -295,6 +295,11 @@ class UserService:
         if not stats:
             return None
         
+        # Calculate if user is recently active (activity within last 7 days)
+        is_recently_active = False
+        if stats.get("days_since_last_login") is not None:
+            is_recently_active = stats["days_since_last_login"] <= 7
+        
         # Determine engagement level
         engagement_level = self._calculate_engagement_level(stats)
         
@@ -304,7 +309,7 @@ class UserService:
             total_usage_minutes=stats["total_usage_minutes"],
             last_login_at=None,  # Would need to parse from stats if available
             days_since_registration=stats["days_since_registration"],
-            is_recently_active=stats["is_recently_active"],
+            is_recently_active=is_recently_active,
             engagement_level=engagement_level
         )
     
@@ -341,92 +346,131 @@ class UserService:
         else:
             return "low"
 
-    # === Advanced Analytics ===
-    
-    def get_user_insights(self, tenant_id: UUID, user_id: UUID) -> Optional[Dict[str, Any]]:
-        """
-        Get comprehensive user insights and recommendations.
+    def get_user_by_id_in_tenant(self, user_id: str, tenant_id: UUID) -> Optional[User]:
+        """Get user by ID within a specific tenant"""
+        print(f"Inside get_user_by_id_in_tenant method")
+        print(f"  user_id type: {type(user_id)}, value: {user_id}")
+        print(f"  tenant_id type: {type(tenant_id)}, value: {tenant_id}")
         
-        Args:
-            tenant_id: Tenant UUID for isolation
-            user_id: User UUID to analyze
+        try:
+            # Try converting string UUID to UUID object if needed
+            if isinstance(user_id, str):
+                print(f"  Converting user_id string to UUID")
+                try:
+                    user_id_uuid = UUID(user_id)
+                    print(f"  Converted user_id: {user_id_uuid}")
+                except ValueError as e:
+                    print(f"  ERROR converting user_id to UUID: {str(e)}")
+                    return None
+            else:
+                user_id_uuid = user_id
             
-        Returns:
-            Dictionary with detailed user insights or None if not found
-        """
-        activity_summary = self.get_user_activity_summary(tenant_id, user_id)
-        if not activity_summary:
-            return None
-        
-        # Generate usage patterns
-        usage_patterns = self._analyze_usage_patterns(tenant_id, user_id)
-        
-        # Generate recommendations
-        recommendations = self._generate_user_recommendations(activity_summary, usage_patterns)
-        
-        return {
-            "user_id": str(user_id),
-            "activity_summary": {
-                "total_logins": activity_summary.total_logins,
-                "total_usage_minutes": activity_summary.total_usage_minutes,
-                "days_since_registration": activity_summary.days_since_registration,
-                "engagement_level": activity_summary.engagement_level,
-                "is_recently_active": activity_summary.is_recently_active
-            },
-            "usage_patterns": usage_patterns,
-            "recommendations": recommendations
-        }
-    
-    def _analyze_usage_patterns(self, tenant_id: UUID, user_id: UUID) -> Dict[str, Any]:
-        """
-        Analyze user usage patterns.
-        
-        Args:
-            tenant_id: Tenant UUID for isolation
-            user_id: User UUID to analyze
+            # Instead of direct query, use the user_repo which is designed 
+            # to work with SQL Server's UNIQUEIDENTIFIER fields
+            print(f"  Using user_repo to find user")
+            # Most user repos have a get_by_tenant method or similar
+            try:
+                # Try to use a repository method if available
+                if hasattr(self.user_repo, 'get_by_tenant'):
+                    user = self.user_repo.get_by_tenant(self.db, tenant_id, user_id_uuid)
+                    print(f"  Found user with get_by_tenant: {user}")
+                else:
+                    # Fallback to direct query with proper SQL Server handling
+                    user = self.db.query(User).filter(
+                        User.id == user_id_uuid,
+                        User.tenant_id == tenant_id
+                    ).first()
+                    print(f"  Found user with direct query: {user}")
+                
+                return user
+            except Exception as repo_error:
+                print(f"  Error in repository: {str(repo_error)}")
+                # Try one more approach - filter manually
+                all_tenant_users = self.db.query(User).filter(User.tenant_id == tenant_id).all()
+                print(f"  Got {len(all_tenant_users)} users in tenant")
+                
+                # Find the user with matching ID (string comparison)
+                for u in all_tenant_users:
+                    if str(u.id).lower() == str(user_id).lower():
+                        print(f"  Found user by string comparison: {u}")
+                        return u
+                
+                return None
+                
+        except Exception as e:
+            print(f"  ERROR in get_user_by_id_in_tenant: {type(e).__name__}: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise e
             
-        Returns:
-            Dictionary with usage pattern insights
+    def search_users_in_tenant(
+        self, 
+        tenant_id: UUID, 
+        search_term: Optional[str] = None,
+        role: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> tuple[List[User], int]:
         """
-        stats = self.user_repo.get_user_statistics(self.db, tenant_id, user_id)
+        Search users within a tenant with filtering and pagination.
         
-        return {
-            "avg_session_length": stats.get("total_usage_minutes", 0) / max(stats.get("login_count", 1), 1),
-            "login_frequency": "weekly" if stats.get("login_count", 0) > 0 else "never",
-            "most_active_time": "business_hours",  # Would be calculated from actual session data
-            "usage_trend": "stable"  # Would be calculated from historical data
-        }
+        Returns tuple of (users, total_count)
+        """
+        query = self.db.query(User).filter(
+            User.tenant_id == tenant_id
+        )
+        
+        # Add is_deleted filter if it exists
+        if hasattr(User, 'is_deleted'):
+            query = query.filter(User.is_deleted == False)
+        
+        # Apply search term filter
+        if search_term:
+            search_pattern = f"%{search_term}%"
+            query = query.filter(
+                (User.email.ilike(search_pattern)) | 
+                (User.display_name.ilike(search_pattern))
+            )
+        
+        # Apply role filter
+        if role:
+            query = query.filter(User.role == role)
+        
+        # Apply active status filter
+        if is_active is not None:
+            query = query.filter(User.is_active == is_active)
+        
+        # Get total count before pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        users = query.offset(offset).limit(limit).all()
+        
+        return users, total_count
+        
+    def deactivate_user(self, user_id: UUID) -> User:
+        """Deactivate a user (soft delete)"""
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("User not found")
+        
+        user.is_active = False
+        user.updated_at = datetime.utcnow()
+        
+        self.db.commit()
+        return user
     
-    def _generate_user_recommendations(self, activity_summary: UserActivitySummary, 
-                                     usage_patterns: Dict[str, Any]) -> List[str]:
-        """
-        Generate personalized recommendations for the user.
-        
-        Args:
-            activity_summary: User activity summary
-            usage_patterns: User usage patterns
-            
-        Returns:
-            List of recommendation strings
-        """
-        recommendations = []
-        
-        if activity_summary.engagement_level == "low":
-            recommendations.append("Try exploring more features to get the most value from the platform")
-            recommendations.append("Consider setting up regular usage sessions to build engagement")
-        
-        if activity_summary.engagement_level == "inactive":
-            recommendations.append("Welcome back! Check out what's new since your last visit")
-            recommendations.append("Complete your profile setup to personalize your experience")
-        
-        if activity_summary.total_logins < 5:
-            recommendations.append("Complete the getting started guide to learn key features")
-        
-        if usage_patterns["avg_session_length"] < 10:
-            recommendations.append("Take time to explore features more deeply in each session")
-        
-        return recommendations
+    def _verify_password(self, password: str, password_hash: str) -> bool:
+        """Verify password against hash - implement proper password hashing"""
+        # Placeholder - implement with bcrypt or similar
+        return password == password_hash  # TEMPORARY - NOT SECURE
     
+    def _hash_password(self, password: str) -> str:
+        """Hash password - implement proper password hashing"""
+        # Placeholder - implement with bcrypt or similar
+        return password  # TEMPORARY - NOT SECURE
+
     # === Tenant-Level User Management ===
     
     def get_tenant_user_overview(self, tenant_id: UUID) -> Dict[str, Any]:
@@ -546,7 +590,6 @@ class UserService:
                 "analysis_date": datetime.now(timezone.utc).isoformat()
             }
 
-
 # Dependency injection helper for FastAPI
 def get_user_service(db: Session) -> UserService:
     """
@@ -562,3 +605,109 @@ def get_user_service(db: Session) -> UserService:
             return profile
     """
     return UserService(db)
+
+def get_user_insights(self, tenant_id: UUID, user_id: UUID) -> Optional[Dict[str, Any]]:
+        """
+        Get comprehensive user insights and recommendations.
+        
+        Args:
+            tenant_id: Tenant UUID for isolation
+            user_id: User UUID to analyze
+            
+        Returns:
+            Dictionary with detailed user insights or None if not found
+        """
+        activity_summary = self.get_user_activity_summary(tenant_id, user_id)
+        if not activity_summary:
+            return None
+        
+        # Generate usage patterns
+        usage_patterns = self._analyze_usage_patterns(tenant_id, user_id)
+        
+        # Generate recommendations
+        recommendations = self._generate_user_recommendations(activity_summary, usage_patterns)
+        
+        return {
+            "user_id": str(user_id),
+            "activity_summary": {
+                "total_logins": activity_summary.total_logins,
+                "total_usage_minutes": activity_summary.total_usage_minutes,
+                "days_since_registration": activity_summary.days_since_registration,
+                "engagement_level": activity_summary.engagement_level,
+                "is_recently_active": activity_summary.is_recently_active
+            },
+            "usage_patterns": usage_patterns,
+            "recommendations": recommendations
+        }
+    
+def _analyze_usage_patterns(self, tenant_id: UUID, user_id: UUID) -> Dict[str, Any]:
+        """
+        Analyze user usage patterns.
+        
+        Args:
+            tenant_id: Tenant UUID for isolation
+            user_id: User UUID to analyze
+            
+        Returns:
+            Dictionary with usage pattern insights
+        """
+        stats = self.user_repo.get_user_statistics(self.db, tenant_id, user_id)
+        
+        return {
+            "avg_session_length": stats.get("total_usage_minutes", 0) / max(stats.get("login_count", 1), 1),
+            "login_frequency": "weekly" if stats.get("login_count", 0) > 0 else "never",
+            "most_active_time": "business_hours",  # Would be calculated from actual session data
+            "usage_trend": "stable"  # Would be calculated from historical data
+        }
+    
+def _generate_user_recommendations(self, activity_summary: UserActivitySummary, 
+                                     usage_patterns: Dict[str, Any]) -> List[str]:
+        """
+        Generate personalized recommendations for the user.
+        
+        Args:
+            activity_summary: User activity summary
+            usage_patterns: User usage patterns
+            
+        Returns:
+            List of recommendation strings
+        """
+        recommendations = []
+        
+        if activity_summary.engagement_level == "low":
+            recommendations.append("Try exploring more features to get the most value from the platform")
+            recommendations.append("Consider setting up regular usage sessions to build engagement")
+        
+        if activity_summary.engagement_level == "inactive":
+            recommendations.append("Welcome back! Check out what's new since your last visit")
+            recommendations.append("Complete your profile setup to personalize your experience")
+        
+        if activity_summary.total_logins < 5:
+            recommendations.append("Complete the getting started guide to learn key features")
+        
+        if usage_patterns["avg_session_length"] < 10:
+            recommendations.append("Take time to explore features more deeply in each session")
+        
+        return recommendations
+    
+def change_user_password(self, user_id: UUID, current_password: str, new_password: str) -> bool:
+    """
+    Change a user's password after verifying the current password.
+    
+    Returns True if successful, False if current password is incorrect.
+    """
+    user = self.get_user_by_id(user_id)
+    if not user:
+        raise ValueError("User not found")
+    
+    # Verify current password (you'll need to implement password hashing)
+    # For now, this is a placeholder - you should use proper password hashing
+    if not self._verify_password(current_password, user.password_hash):
+        return False
+    
+    # Hash new password and update
+    user.password_hash = self._hash_password(new_password)
+    user.updated_at = datetime.utcnow()
+    
+    self.db.commit()
+    return True
