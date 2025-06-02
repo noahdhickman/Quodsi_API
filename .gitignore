@@ -50,7 +50,7 @@ dist/
 *.egg-info/
 
 # Add to existing .gitignore if not already present
-alembic/versions/*.py
+# alembic/versions/*.py
 !alembic/versions/.gitkeep
 test_db.py  # Optional: if you want to exclude the test file
 
