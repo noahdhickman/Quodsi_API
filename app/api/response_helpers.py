@@ -9,7 +9,7 @@ def create_success_response(
 ) -> Dict[str, Any]:
     """Create a standardized success response"""
     response = StandardResponse.success(data=data, tenant_id=tenant_id)
-    return response.dict(exclude_none=True)
+    return response.model_dump(exclude_none=True)
 
 def create_error_response(
     code: str,
@@ -20,7 +20,7 @@ def create_error_response(
     """Create a standardized error response"""
     error = ErrorDetail(code=code, message=message, field=field)
     response = StandardResponse.error(errors=[error], tenant_id=tenant_id)
-    return response.dict(exclude_none=True)
+    return response.model_dump(exclude_none=True)
 
 def create_validation_error_response(
     validation_errors: List[Dict[str, Any]],
@@ -36,4 +36,4 @@ def create_validation_error_response(
         for error in validation_errors
     ]
     response = StandardResponse.error(errors=errors, tenant_id=tenant_id)
-    return response.dict(exclude_none=True)
+    return response.model_dump(exclude_none=True)

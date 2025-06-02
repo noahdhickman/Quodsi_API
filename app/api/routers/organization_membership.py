@@ -28,7 +28,7 @@ from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/memberships", tags=["organization-memberships"])
+router = APIRouter(prefix="/memberships")
 
 
 @router.post("/invite", response_model=dict)

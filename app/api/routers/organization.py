@@ -29,7 +29,7 @@ from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/organizations", tags=["organizations"])
+router = APIRouter(prefix="/organizations")
 
 
 @router.post("/", response_model=dict)

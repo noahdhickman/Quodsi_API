@@ -22,7 +22,7 @@ from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/users", tags=["user-profile"])
+router = APIRouter(prefix="/users")
 
 @router.get("/me", response_model=dict)
 async def get_my_profile(
