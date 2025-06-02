@@ -53,3 +53,7 @@ dist/
 alembic/versions/*.py
 !alembic/versions/.gitkeep
 test_db.py  # Optional: if you want to exclude the test file
+
+# Logs
+logs/
+*.log

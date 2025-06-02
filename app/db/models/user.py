@@ -45,6 +45,8 @@ class User(BaseEntity):
     )
     
     tenant = relationship("Tenant", back_populates="users")
+    # Add this line to the User model's relationships section
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     
     # Additional indexes for user-specific queries
     @declared_attr

@@ -1,5 +1,5 @@
 # app/api/routers/registration.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from typing import Optional
@@ -23,12 +23,16 @@ from app.api.response_helpers import (
 )
 from app.api.deps import get_current_user_mock, MockCurrentUser
 from pydantic import ValidationError
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/registration", tags=["registration"])
 
 @router.post("/tenant", response_model=dict)
 async def register_tenant(
-    request: TenantRegistrationRequest,
+    request: Request,
+    registration_data: TenantRegistrationRequest,
     db: Session = Depends(get_db)
 ):
     """
@@ -36,63 +40,121 @@ async def register_tenant(
     
     This endpoint creates both a tenant and its first admin user.
     """
+    # Get request ID from middleware
+    request_id = getattr(request.state, "request_id", "unknown")
+    
+    # Log request entry with context
+    logger.info(
+        "Tenant registration request received",
+        extra={
+            "extra_fields": {
+                "request_id": request_id,
+                "email": registration_data.admin_email,
+                "company_name": registration_data.name,
+                "domain": registration_data.domain,
+                "endpoint": "/registration/tenant",
+                "method": "POST"
+            }
+        }
+    )
+    
     try:
         registration_service = RegistrationService(db)
         
-        # Create tenant first
-        tenant_data = TenantCreate(
-            name=request.name,
-            slug=request.domain,
-            subdomain=request.domain,
-            plan_type="trial",
-            status="trial"
+        # Create tenant with admin using the service
+        result = registration_service.register_tenant_with_admin(
+            tenant_name=registration_data.name,
+            domain=registration_data.domain,
+            admin_email=registration_data.admin_email,
+            admin_password=registration_data.admin_password,
+            admin_display_name=registration_data.admin_display_name,
+            request_id=request_id  # Pass request_id to service
         )
         
-        tenant = tenant_repo.create(db, obj_in=tenant_data)
-        
-        # Create admin user
-        user_data = {
-            "email": request.admin_email,
-            "display_name": request.admin_display_name,
-            "identity_provider": "local",
-            "identity_provider_id": request.admin_email,
-            "tenant_id": tenant.id,
-            "status": "active"
-        }
-        
-        # Create user using the repository
-        user = user_repo.create(db, obj_in=user_data, tenant_id=tenant.id)
-        
-        # Commit the transaction
-        db.commit()
+        # Log successful completion
+        logger.info(
+            "Tenant registration completed successfully",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "user_id": str(result["admin_user_id"]),
+                    "tenant_id": str(result["tenant_id"]),
+                    "email": result["admin_email"],
+                    "tenant_name": result["tenant_name"],
+                    "endpoint": "/registration/tenant",
+                    "status": "success"
+                }
+            }
+        )
         
         # Create response data
         response_data = TenantRegistrationResponse(
-            tenant_id=tenant.id,
-            tenant_name=tenant.name,
-            domain=tenant.slug,
-            admin_user_id=user.id,
-            admin_email=user.email,
+            tenant_id=result["tenant_id"],
+            tenant_name=result["tenant_name"],
+            domain=result["domain"],
+            admin_user_id=result["admin_user_id"],
+            admin_email=result["admin_email"],
             message="Tenant and admin user registered successfully"
         )
         
         return create_success_response(
             data=response_data.dict(),
-            tenant_id=tenant.id
+            tenant_id=result["tenant_id"]
         )
         
     except ValueError as e:
+        # Business logic errors (validation, duplicates, etc.)
+        logger.warning(
+            f"Registration failed - validation error: {str(e)}",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "email": registration_data.admin_email,
+                    "company_name": registration_data.name,
+                    "domain": registration_data.domain,
+                    "error_type": "validation_error",
+                    "endpoint": "/registration/tenant"
+                }
+            }
+        )
         return create_error_response(
             code="REGISTRATION_ERROR",
             message=str(e)
         )
     except IntegrityError as e:
+        # Database integrity errors
+        logger.warning(
+            f"Registration failed - integrity error: {str(e)}",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "email": registration_data.admin_email,
+                    "domain": registration_data.domain,
+                    "error_type": "duplicate_error",
+                    "endpoint": "/registration/tenant"
+                }
+            }
+        )
         db.rollback()
         return create_error_response(
             code="DUPLICATE_ERROR",
             message="Tenant domain or admin email already exists"
         )
     except Exception as e:
+        # Unexpected system errors
+        logger.error(
+            f"Registration failed - unexpected error: {str(e)}",
+            exc_info=True,  # Include stack trace
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "email": registration_data.admin_email,
+                    "company_name": registration_data.name,
+                    "error_type": "internal_error",
+                    "endpoint": "/registration/tenant"
+                }
+            }
+        )
         db.rollback()
         return create_error_response(
             code="INTERNAL_ERROR",

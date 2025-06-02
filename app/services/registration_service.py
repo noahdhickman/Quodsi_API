@@ -8,6 +8,9 @@ from app.repositories.user_repository import user_repo
 from app.schemas.user import UserRegistration
 from app.schemas.tenant import TenantCreate
 from app.schemas.user import UserCreate
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 class RegistrationService:
     """
@@ -149,10 +152,13 @@ class RegistrationService:
             display_name=registration_data.display_name,
             identity_provider=registration_data.identity_provider,
             identity_provider_id=registration_data.identity_provider_id or registration_data.email,
-            tenant_id=tenant_id  # FIXED: Added missing tenant_id
+            tenant_id=tenant_id
         )
         
-        return self.user_repo.create_user_for_tenant(self.db, obj_in=user_create_data)
+        return self.user_repo.create_user_for_tenant(
+            self.db,
+            obj_in=user_create_data
+        )
     
     def validate_registration_availability(self, registration_data: UserRegistration) -> Dict[str, Any]:
         """
@@ -248,6 +254,185 @@ class RegistrationService:
                 "suggested_subdomain": basic_slug.replace('-', ''),
                 "company_name": company_name
             }
+    
+    def register_tenant_with_admin(
+        self,
+        tenant_name: str,
+        domain: str,
+        admin_email: str,
+        admin_password: str,
+        admin_display_name: str,
+        request_id: str = "unknown"
+    ) -> dict:
+        """
+        Register a new tenant with an admin user.
+        
+        This method creates both a tenant and its first admin user in a single transaction.
+        
+        Args:
+            tenant_name: Name of the tenant organization
+            domain: Domain/slug for the tenant
+            admin_email: Email address for the admin user
+            admin_password: Password for the admin user
+            admin_display_name: Display name for the admin user
+            request_id: Optional request ID for tracking
+        
+        Returns:
+            Dictionary containing the created tenant and admin user information
+        
+        Raises:
+            ValueError: If validation fails or conflicts exist
+            Exception: For database errors (triggers rollback)
+        """
+        # START LOG - Log operation beginning with context
+        logger.info(
+            "Starting tenant registration with admin user",
+            extra={
+                "extra_fields": {
+                    "request_id": request_id,
+                    "tenant_name": tenant_name,
+                    "domain": domain,
+                    "admin_email": admin_email,
+                    "operation": "register_tenant_with_admin"
+                }
+            }
+        )
+        
+        try:
+            # Step 1: Create tenant
+            logger.debug(
+                "Creating tenant organization", 
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "step": "create_tenant",
+                        "tenant_name": tenant_name,
+                        "domain": domain
+                    }
+                }
+            )
+            
+            from app.schemas.tenant import TenantCreate
+            
+            # Create tenant with TenantCreate object
+            tenant_data = TenantCreate(
+                name=tenant_name,
+                slug=domain,
+                subdomain=domain,
+                plan_type="trial",
+                status="trial"
+            )
+            
+            # Create the tenant using the repository
+            tenant = self.tenant_repo.create(self.db, obj_in=tenant_data)
+            logger.debug(
+                "Tenant created successfully", 
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "step": "create_tenant",
+                        "tenant_id": str(tenant.id),
+                        "tenant_name": tenant.name
+                    }
+                }
+            )
+            
+            # Step 2: Create admin user
+            logger.debug(
+                "Creating admin user for tenant", 
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "step": "create_admin_user",
+                        "tenant_id": str(tenant.id),
+                        "admin_email": admin_email
+                    }
+                }
+            )
+            
+            # Create admin user with local identity provider
+            user_dict = {
+                "email": admin_email,
+                "display_name": admin_display_name,
+                "identity_provider": "local",
+                "identity_provider_id": admin_email,
+                "status": "active"
+            }
+            admin_user = self.user_repo.create(self.db, obj_in=user_dict, tenant_id=tenant.id)
+            logger.debug(
+                "Admin user created successfully", 
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "step": "create_admin_user",
+                        "user_id": str(admin_user.id),
+                        "tenant_id": str(tenant.id)
+                    }
+                }
+            )
+            
+            # Step 3: Commit transaction
+            logger.debug(
+                "Committing transaction", 
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "step": "commit_transaction"
+                    }
+                }
+            )
+            self.db.commit()
+            
+            # Prepare result
+            result = {
+                "tenant_id": tenant.id,
+                "tenant_name": tenant.name,
+                "domain": domain,
+                "admin_user_id": admin_user.id,
+                "admin_email": admin_email
+            }
+            
+            # SUCCESS LOG - Log successful completion with results
+            logger.info(
+                "Tenant registration completed successfully", 
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "tenant_id": str(tenant.id),
+                        "admin_user_id": str(admin_user.id),
+                        "operation": "register_tenant_with_admin",
+                        "status": "success"
+                    }
+                }
+            )
+            
+            return result
+            
+        except Exception as e:
+            # Rollback on any error
+            try:
+                self.db.rollback()
+                logger.debug("Database rollback successful")
+            except Exception as rollback_error:
+                logger.error(f"Error during rollback: {str(rollback_error)}")
+            
+            # ERROR LOG - Log failures with context
+            logger.error(
+                f"Tenant registration failed: {str(e)}",
+                exc_info=True,
+                extra={
+                    "extra_fields": {
+                        "request_id": request_id,
+                        "tenant_name": tenant_name,
+                        "domain": domain,
+                        "admin_email": admin_email,
+                        "operation": "register_tenant_with_admin",
+                        "status": "failed",
+                        "error_type": type(e).__name__
+                    }
+                }
+            )
+            raise e
 
 
 # Dependency injection helper for FastAPI
