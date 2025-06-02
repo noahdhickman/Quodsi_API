@@ -20,7 +20,7 @@ venv.bak/
 *.sqlite
 
 # IDE
-.vscode/
+# .vscode/
 .idea/
 *.swp
 *.swo
