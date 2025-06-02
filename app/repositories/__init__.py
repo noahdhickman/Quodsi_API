@@ -12,9 +12,11 @@ from .tenant_repository import TenantRepository, tenant_repo
 from .user_repository import UserRepository, user_repo
 from .user_session_repository import UserSessionRepository
 from .organization_repository import OrganizationRepository
+from .organization_membership_repository import OrganizationMembershipRepository
 
-# Create singleton instance for dependency injection
+# Create singleton instances for dependency injection
 organization_repo = OrganizationRepository()
+organization_membership_repo = OrganizationMembershipRepository()
 
 __all__ = [
     "BaseRepository",
@@ -25,4 +27,6 @@ __all__ = [
     "UserSessionRepository",
     "OrganizationRepository",
     "organization_repo",
+    "OrganizationMembershipRepository",
+    "organization_membership_repo",
 ]

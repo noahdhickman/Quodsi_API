@@ -118,6 +118,16 @@ class UserResponse(BaseModel):
     )
 
 
+class UserSummary(BaseModel):
+    """Lightweight user schema for listings and references"""
+    id: UUID = Field(..., description="User unique identifier")
+    email: EmailStr = Field(..., description="User's email address")
+    display_name: str = Field(..., description="User's display name")
+    status: str = Field(..., description="User status")
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
 class UserWithTenant(UserResponse):
     """User schema with tenant information included"""
     tenant: Optional[dict] = Field(None, description="Tenant information")

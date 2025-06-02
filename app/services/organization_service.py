@@ -6,14 +6,26 @@ from datetime import datetime, timezone
 import json
 
 from app.db.models.organization import Organization
+from app.db.models.organization_membership import OrganizationMembership
 from app.repositories import organization_repo
 from app.repositories import user_repo
+from app.repositories.organization_membership_repository import OrganizationMembershipRepository
 from app.schemas.organization import (
     OrganizationCreate,
     OrganizationUpdate,
     OrganizationRead,
     OrganizationSummary,
     OrganizationListResponse,
+)
+from app.schemas.organization_membership import (
+    OrganizationMembershipCreate,
+    OrganizationMembershipRead,
+    OrganizationMembershipUpdate,
+    OrganizationMembershipSummary,
+    OrganizationMembershipListResponse,
+    OrganizationMembersResponse,
+    UserOrganizationsResponse,
+    InvitationRequest,
 )
 
 
@@ -43,6 +55,7 @@ class OrganizationService:
         self.db = db
         self.organization_repo = organization_repo
         self.user_repo = user_repo
+        self.membership_repo = OrganizationMembershipRepository()
 
     # === Core CRUD Operations ===
 
@@ -554,6 +567,437 @@ class OrganizationService:
             json.loads(metadata)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON metadata: {str(e)}")
+
+    # === Organization Membership Management ===
+
+    def create_organization_with_owner(
+        self, tenant_id: UUID, organization_data: OrganizationCreate, owner_user_id: UUID
+    ) -> OrganizationRead:
+        """
+        Create organization and automatically add creator as owner.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            organization_data: Organization creation data
+            owner_user_id: User UUID to make owner
+
+        Returns:
+            Created organization data
+
+        Raises:
+            ValueError: If validation fails
+        """
+        try:
+            # Create the organization first
+            organization = self.create_organization(tenant_id, organization_data)
+            
+            # Add creator as owner
+            self.membership_repo.add_member(
+                db=self.db,
+                tenant_id=tenant_id,
+                organization_id=organization.id,
+                user_id=owner_user_id,
+                role="owner",
+                status="active"
+            )
+            
+            # Commit membership creation
+            self.db.commit()
+            
+            return organization
+            
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def invite_user_to_organization(
+        self, 
+        tenant_id: UUID, 
+        organization_id: UUID, 
+        user_email: str,
+        role: str, 
+        inviter_user_id: UUID,
+        message: Optional[str] = None
+    ) -> OrganizationMembershipRead:
+        """
+        Invite user to organization by email.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            organization_id: Organization UUID
+            user_email: Email of user to invite
+            role: Role to assign
+            inviter_user_id: User sending invitation
+            message: Optional invitation message
+
+        Returns:
+            Created membership invitation
+
+        Raises:
+            ValueError: If validation fails or user not found
+        """
+        try:
+            # Check if inviter has permission to invite
+            if not self.membership_repo.user_has_permission(
+                self.db, tenant_id, inviter_user_id, organization_id, ["owner", "admin"]
+            ):
+                raise ValueError("You don't have permission to invite users to this organization")
+            
+            # Find user by email
+            user = self.user_repo.get_by_email(self.db, tenant_id, user_email)
+            if not user:
+                raise ValueError(f"User with email '{user_email}' not found in this tenant")
+            
+            # Check if user is already a member
+            existing_membership = self.membership_repo.get_membership(
+                self.db, tenant_id, organization_id, user.id
+            )
+            if existing_membership and not existing_membership.is_deleted:
+                if existing_membership.status == "active":
+                    raise ValueError("User is already a member of this organization")
+                elif existing_membership.status == "invited":
+                    raise ValueError("User already has a pending invitation to this organization")
+            
+            # Create membership invitation
+            membership = self.membership_repo.add_member(
+                db=self.db,
+                tenant_id=tenant_id,
+                organization_id=organization_id,
+                user_id=user.id,
+                role=role,
+                invited_by_user_id=inviter_user_id,
+                status="invited"
+            )
+            
+            self.db.commit()
+            
+            return OrganizationMembershipRead.model_validate(membership)
+            
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def accept_invitation(
+        self, tenant_id: UUID, membership_id: UUID, user_id: UUID
+    ) -> OrganizationMembershipRead:
+        """
+        Accept organization invitation.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            membership_id: Membership UUID
+            user_id: User accepting invitation
+
+        Returns:
+            Updated membership
+
+        Raises:
+            ValueError: If invitation invalid
+        """
+        try:
+            membership = self.membership_repo.get_membership_by_id(
+                self.db, tenant_id, membership_id
+            )
+            
+            if not membership:
+                raise ValueError("Invitation not found")
+            
+            if membership.user_id != user_id:
+                raise ValueError("You can only accept your own invitations")
+            
+            if membership.status != "invited":
+                raise ValueError("This invitation is no longer valid")
+            
+            updated_membership = self.membership_repo.accept_invitation(
+                self.db, tenant_id, membership_id
+            )
+            
+            self.db.commit()
+            
+            return OrganizationMembershipRead.model_validate(updated_membership)
+            
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def remove_user_from_organization(
+        self, 
+        tenant_id: UUID, 
+        organization_id: UUID, 
+        user_id: UUID,
+        remover_user_id: UUID
+    ) -> bool:
+        """
+        Remove user from organization.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            organization_id: Organization UUID
+            user_id: User to remove
+            remover_user_id: User performing removal
+
+        Returns:
+            True if removed successfully
+
+        Raises:
+            ValueError: If permission denied or validation fails
+        """
+        try:
+            # Check permissions
+            if remover_user_id != user_id:  # User can remove themselves
+                if not self.membership_repo.user_has_permission(
+                    self.db, tenant_id, remover_user_id, organization_id, ["owner", "admin"]
+                ):
+                    raise ValueError("You don't have permission to remove users from this organization")
+            
+            # Get membership to remove
+            membership = self.membership_repo.get_membership(
+                self.db, tenant_id, organization_id, user_id
+            )
+            
+            if not membership:
+                raise ValueError("User is not a member of this organization")
+            
+            # Prevent removing the last owner
+            if membership.role == "owner":
+                owners = self.membership_repo.get_organization_owners(
+                    self.db, tenant_id, organization_id
+                )
+                if len(owners) <= 1:
+                    raise ValueError("Cannot remove the last owner of the organization")
+            
+            success = self.membership_repo.remove_member(
+                self.db, membership.id, tenant_id
+            )
+            
+            if success:
+                self.db.commit()
+            
+            return success
+            
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def update_user_role_in_organization(
+        self, 
+        tenant_id: UUID, 
+        organization_id: UUID, 
+        user_id: UUID,
+        new_role: str,
+        updater_user_id: UUID
+    ) -> Optional[OrganizationMembershipRead]:
+        """
+        Update user's role in organization.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            organization_id: Organization UUID
+            user_id: User whose role to update
+            new_role: New role to assign
+            updater_user_id: User performing update
+
+        Returns:
+            Updated membership or None if not found
+
+        Raises:
+            ValueError: If permission denied or validation fails
+        """
+        try:
+            # Check permissions
+            if not self.membership_repo.user_has_permission(
+                self.db, tenant_id, updater_user_id, organization_id, ["owner", "admin"]
+            ):
+                raise ValueError("You don't have permission to update user roles")
+            
+            # Get membership to update
+            membership = self.membership_repo.get_membership(
+                self.db, tenant_id, organization_id, user_id
+            )
+            
+            if not membership:
+                raise ValueError("User is not a member of this organization")
+            
+            # Special handling for owner role changes
+            if membership.role == "owner" and new_role != "owner":
+                owners = self.membership_repo.get_organization_owners(
+                    self.db, tenant_id, organization_id
+                )
+                if len(owners) <= 1:
+                    raise ValueError("Cannot demote the last owner of the organization")
+            
+            updated_membership = self.membership_repo.update_member_role_or_status(
+                self.db, membership.id, tenant_id, new_role=new_role
+            )
+            
+            self.db.commit()
+            
+            return OrganizationMembershipRead.model_validate(updated_membership) if updated_membership else None
+            
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def list_organization_members(
+        self, 
+        tenant_id: UUID, 
+        organization_id: UUID,
+        skip: int = 0,
+        limit: int = 50,
+        status_filter: Optional[str] = "active",
+        role_filter: Optional[str] = None
+    ) -> OrganizationMembersResponse:
+        """
+        List members of an organization.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            organization_id: Organization UUID
+            skip: Pagination offset
+            limit: Maximum results
+            status_filter: Filter by status
+            role_filter: Filter by role
+
+        Returns:
+            Organization members with metadata
+        """
+        memberships = self.membership_repo.get_members_of_organization(
+            self.db, tenant_id, organization_id, skip, limit, status_filter, role_filter
+        )
+        
+        total = self.membership_repo.count_organization_members(
+            self.db, tenant_id, organization_id, status_filter
+        )
+        
+        role_counts = self.membership_repo.get_organization_member_counts_by_role(
+            self.db, tenant_id, organization_id
+        )
+        
+        member_summaries = [
+            OrganizationMembershipSummary.model_validate(membership) 
+            for membership in memberships
+        ]
+        
+        return OrganizationMembersResponse(
+            organization_id=organization_id,
+            members=member_summaries,
+            total=total,
+            by_role=role_counts
+        )
+
+    def list_user_organizations(
+        self, 
+        tenant_id: UUID, 
+        user_id: UUID,
+        skip: int = 0,
+        limit: int = 50,
+        status_filter: Optional[str] = "active"
+    ) -> UserOrganizationsResponse:
+        """
+        List organizations that a user belongs to.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            user_id: User UUID
+            skip: Pagination offset
+            limit: Maximum results
+            status_filter: Filter by membership status
+
+        Returns:
+            User's organizations with membership details
+        """
+        memberships = self.membership_repo.get_organizations_for_user(
+            self.db, tenant_id, user_id, skip, limit, status_filter
+        )
+        
+        membership_reads = [
+            OrganizationMembershipRead.model_validate(membership) 
+            for membership in memberships
+        ]
+        
+        return UserOrganizationsResponse(
+            user_id=user_id,
+            organizations=membership_reads,
+            total=len(membership_reads)
+        )
+
+    def get_user_role_in_organization(
+        self, tenant_id: UUID, user_id: UUID, organization_id: UUID
+    ) -> Optional[str]:
+        """
+        Get user's role in organization.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            user_id: User UUID
+            organization_id: Organization UUID
+
+        Returns:
+            User's role or None if not a member
+        """
+        return self.membership_repo.get_user_role_in_organization(
+            self.db, tenant_id, user_id, organization_id
+        )
+
+    def user_has_organization_permission(
+        self, 
+        tenant_id: UUID, 
+        user_id: UUID, 
+        organization_id: UUID,
+        required_roles: List[str]
+    ) -> bool:
+        """
+        Check if user has required permission in organization.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            user_id: User UUID
+            organization_id: Organization UUID
+            required_roles: List of acceptable roles
+
+        Returns:
+            True if user has required permission
+        """
+        return self.membership_repo.user_has_permission(
+            self.db, tenant_id, user_id, organization_id, required_roles
+        )
+
+    def get_pending_invitations(
+        self, 
+        tenant_id: UUID, 
+        user_id: Optional[UUID] = None,
+        organization_id: Optional[UUID] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> OrganizationMembershipListResponse:
+        """
+        Get pending invitations.
+
+        Args:
+            tenant_id: Tenant UUID for isolation
+            user_id: Filter by user (optional)
+            organization_id: Filter by organization (optional)
+            skip: Pagination offset
+            limit: Maximum results
+
+        Returns:
+            Pending invitations
+        """
+        invitations = self.membership_repo.get_pending_invitations(
+            self.db, tenant_id, user_id, organization_id, skip, limit
+        )
+        
+        invitation_summaries = [
+            OrganizationMembershipSummary.model_validate(invitation) 
+            for invitation in invitations
+        ]
+        
+        return OrganizationMembershipListResponse(
+            memberships=invitation_summaries,
+            total=len(invitation_summaries),
+            skip=skip,
+            limit=limit
+        )
 
 
 # Dependency injection helper for FastAPI

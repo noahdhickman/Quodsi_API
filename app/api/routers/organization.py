@@ -15,6 +15,9 @@ from app.schemas.organization import (
     OrganizationRead,
     OrganizationListResponse,
 )
+from app.schemas.organization_membership import (
+    InvitationRequest,
+)
 from app.api.response_helpers import create_success_response, create_error_response
 from app.api.deps import (
     get_current_user_mock,
@@ -61,9 +64,11 @@ async def create_organization(
     try:
         organization_service = OrganizationService(db)
 
-        # Create organization
-        new_organization = organization_service.create_organization(
-            tenant_id=current_user.tenant_id, organization_data=organization_data
+        # Create organization with creator as owner
+        new_organization = organization_service.create_organization_with_owner(
+            tenant_id=current_user.tenant_id, 
+            organization_data=organization_data,
+            owner_user_id=current_user.user_id
         )
 
         # Log successful completion
@@ -627,5 +632,391 @@ async def get_organizations_with_billing(
         return create_error_response(
             code="RETRIEVAL_ERROR",
             message="Unable to retrieve organizations with billing",
+            tenant_id=current_user.tenant_id,
+        )
+
+
+# === Organization Membership Endpoints ===
+
+
+@router.post("/{organization_id}/members/invite", response_model=dict)
+async def invite_user_to_organization(
+    organization_id: str = Path(..., description="Organization UUID"),
+    invitation: InvitationRequest = ...,
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    db: Session = Depends(get_db),
+):
+    """
+    Invite a user to join an organization.
+    """
+    try:
+        # Convert string to UUID
+        try:
+            org_id_uuid = UUID(organization_id)
+        except ValueError:
+            return create_error_response(
+                code="INVALID_ID",
+                message="Invalid organization ID format",
+                tenant_id=current_user.tenant_id,
+            )
+
+        organization_service = OrganizationService(db)
+
+        # Invite user to organization
+        membership = organization_service.invite_user_to_organization(
+            tenant_id=current_user.tenant_id,
+            organization_id=org_id_uuid,
+            user_email=invitation.user_email,
+            role=invitation.role,
+            inviter_user_id=current_user.user_id,
+            message=invitation.message
+        )
+
+        logger.info(
+            "User invited to organization successfully",
+            extra={
+                "extra_fields": {
+                    "inviter_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "membership_id": str(membership.id),
+                    "invitee_email": invitation.user_email,
+                    "status": "success",
+                }
+            },
+        )
+
+        return create_success_response(
+            data={
+                **membership.model_dump(),
+                "message": f"Invitation sent to {invitation.user_email}",
+            },
+            tenant_id=current_user.tenant_id,
+        )
+
+    except ValueError as e:
+        return create_error_response(
+            code="INVITATION_ERROR", message=str(e), tenant_id=current_user.tenant_id
+        )
+    except Exception as e:
+        logger.error(
+            f"Organization invitation failed: {str(e)}",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "inviter_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "status": "failed",
+                }
+            },
+        )
+
+        return create_error_response(
+            code="INVITATION_ERROR",
+            message="Unable to send invitation",
+            tenant_id=current_user.tenant_id,
+        )
+
+
+@router.get("/{organization_id}/members", response_model=dict)
+async def list_organization_members(
+    organization_id: str = Path(..., description="Organization UUID"),
+    status_filter: Optional[str] = Query("active", description="Filter by status"),
+    role_filter: Optional[str] = Query(None, description="Filter by role"),
+    limit: Optional[int] = Query(50, ge=1, le=100, description="Number of results"),
+    skip: Optional[int] = Query(0, ge=0, description="Number of results to skip"),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    db: Session = Depends(get_db),
+):
+    """
+    List members of an organization.
+    """
+    try:
+        # Convert string to UUID
+        try:
+            org_id_uuid = UUID(organization_id)
+        except ValueError:
+            return create_error_response(
+                code="INVALID_ID",
+                message="Invalid organization ID format",
+                tenant_id=current_user.tenant_id,
+            )
+
+        organization_service = OrganizationService(db)
+
+        # Check if user has permission to view members
+        if not organization_service.user_has_organization_permission(
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.user_id,
+            organization_id=org_id_uuid,
+            required_roles=["owner", "admin", "member"]  # members can see other members
+        ):
+            return create_error_response(
+                code="PERMISSION_DENIED",
+                message="You don't have permission to view organization members",
+                tenant_id=current_user.tenant_id,
+            )
+
+        # List organization members
+        result = organization_service.list_organization_members(
+            tenant_id=current_user.tenant_id,
+            organization_id=org_id_uuid,
+            skip=skip,
+            limit=limit,
+            status_filter=status_filter,
+            role_filter=role_filter
+        )
+
+        return create_success_response(
+            data=result.model_dump(), tenant_id=current_user.tenant_id
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Organization members listing failed: {str(e)}",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "status": "failed",
+                }
+            },
+        )
+
+        return create_error_response(
+            code="LISTING_ERROR",
+            message="Unable to retrieve organization members",
+            tenant_id=current_user.tenant_id,
+        )
+
+
+@router.put("/{organization_id}/members/{user_id}", response_model=dict)
+async def update_member_role(
+    organization_id: str = Path(..., description="Organization UUID"),
+    user_id: str = Path(..., description="User UUID"),
+    new_role: str = Query(..., description="New role to assign"),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    db: Session = Depends(get_db),
+):
+    """
+    Update a member's role in an organization.
+    """
+    try:
+        # Convert strings to UUIDs
+        try:
+            org_id_uuid = UUID(organization_id)
+            user_id_uuid = UUID(user_id)
+        except ValueError:
+            return create_error_response(
+                code="INVALID_ID",
+                message="Invalid UUID format",
+                tenant_id=current_user.tenant_id,
+            )
+
+        organization_service = OrganizationService(db)
+
+        # Update user role
+        updated_membership = organization_service.update_user_role_in_organization(
+            tenant_id=current_user.tenant_id,
+            organization_id=org_id_uuid,
+            user_id=user_id_uuid,
+            new_role=new_role,
+            updater_user_id=current_user.user_id
+        )
+
+        if not updated_membership:
+            return create_error_response(
+                code="MEMBER_NOT_FOUND",
+                message="Member not found in organization",
+                tenant_id=current_user.tenant_id,
+            )
+
+        logger.info(
+            "Member role updated successfully",
+            extra={
+                "extra_fields": {
+                    "updater_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "target_user_id": user_id,
+                    "new_role": new_role,
+                    "status": "success",
+                }
+            },
+        )
+
+        return create_success_response(
+            data={
+                **updated_membership.model_dump(),
+                "message": f"Member role updated to {new_role}",
+            },
+            tenant_id=current_user.tenant_id,
+        )
+
+    except ValueError as e:
+        return create_error_response(
+            code="ROLE_UPDATE_ERROR", message=str(e), tenant_id=current_user.tenant_id
+        )
+    except Exception as e:
+        logger.error(
+            f"Member role update failed: {str(e)}",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "updater_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "target_user_id": user_id,
+                    "status": "failed",
+                }
+            },
+        )
+
+        return create_error_response(
+            code="ROLE_UPDATE_ERROR",
+            message="Unable to update member role",
+            tenant_id=current_user.tenant_id,
+        )
+
+
+@router.delete("/{organization_id}/members/{user_id}", response_model=dict)
+async def remove_member_from_organization(
+    organization_id: str = Path(..., description="Organization UUID"),
+    user_id: str = Path(..., description="User UUID"),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    db: Session = Depends(get_db),
+):
+    """
+    Remove a member from an organization.
+    """
+    try:
+        # Convert strings to UUIDs
+        try:
+            org_id_uuid = UUID(organization_id)
+            user_id_uuid = UUID(user_id)
+        except ValueError:
+            return create_error_response(
+                code="INVALID_ID",
+                message="Invalid UUID format",
+                tenant_id=current_user.tenant_id,
+            )
+
+        organization_service = OrganizationService(db)
+
+        # Remove user from organization
+        success = organization_service.remove_user_from_organization(
+            tenant_id=current_user.tenant_id,
+            organization_id=org_id_uuid,
+            user_id=user_id_uuid,
+            remover_user_id=current_user.user_id
+        )
+
+        if not success:
+            return create_error_response(
+                code="MEMBER_NOT_FOUND",
+                message="Member not found in organization",
+                tenant_id=current_user.tenant_id,
+            )
+
+        logger.info(
+            "Member removed from organization successfully",
+            extra={
+                "extra_fields": {
+                    "remover_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "removed_user_id": user_id,
+                    "status": "success",
+                }
+            },
+        )
+
+        return create_success_response(
+            data={
+                "organization_id": organization_id,
+                "removed_user_id": user_id,
+                "message": "Member removed from organization successfully",
+            },
+            tenant_id=current_user.tenant_id,
+        )
+
+    except ValueError as e:
+        return create_error_response(
+            code="REMOVAL_ERROR", message=str(e), tenant_id=current_user.tenant_id
+        )
+    except Exception as e:
+        logger.error(
+            f"Member removal failed: {str(e)}",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "remover_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "organization_id": organization_id,
+                    "target_user_id": user_id,
+                    "status": "failed",
+                }
+            },
+        )
+
+        return create_error_response(
+            code="REMOVAL_ERROR",
+            message="Unable to remove member from organization",
+            tenant_id=current_user.tenant_id,
+        )
+
+
+@router.get("/user/{user_id}/organizations", response_model=dict)
+async def get_user_organizations(
+    user_id: str = Path(..., description="User UUID"),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all organizations that a user belongs to.
+    """
+    try:
+        # Convert string to UUID
+        try:
+            user_id_uuid = UUID(user_id)
+        except ValueError:
+            return create_error_response(
+                code="INVALID_ID",
+                message="Invalid user ID format",
+                tenant_id=current_user.tenant_id,
+            )
+
+        organization_service = OrganizationService(db)
+
+        # Get user's organizations
+        result = organization_service.list_user_organizations(
+            tenant_id=current_user.tenant_id, 
+            user_id=user_id_uuid
+        )
+
+        return create_success_response(
+            data=result.model_dump(), tenant_id=current_user.tenant_id
+        )
+
+    except Exception as e:
+        logger.error(
+            f"User organizations retrieval failed: {str(e)}",
+            exc_info=True,
+            extra={
+                "extra_fields": {
+                    "requester_user_id": str(current_user.user_id),
+                    "tenant_id": str(current_user.tenant_id),
+                    "target_user_id": user_id,
+                    "status": "failed",
+                }
+            },
+        )
+
+        return create_error_response(
+            code="RETRIEVAL_ERROR",
+            message="Unable to retrieve user organizations",
             tenant_id=current_user.tenant_id,
         )

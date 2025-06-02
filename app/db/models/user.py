@@ -45,9 +45,9 @@ class User(BaseEntity):
     )
 
     tenant = relationship("Tenant", back_populates="users")
-    # Add this line to the User model's relationships section
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     created_models = relationship("Model", back_populates="created_by_user")
+    organization_memberships = relationship("OrganizationMembership", foreign_keys="OrganizationMembership.user_id", back_populates="user")
 
     # Additional indexes for user-specific queries
     @declared_attr
@@ -75,3 +75,27 @@ class User(BaseEntity):
     def update_activity(self):
         """Update last activity timestamp"""
         self.last_active_at = datetime.utcnow()
+    
+    def get_organizations(self):
+        """Get list of organizations user belongs to"""
+        return [m.organization for m in self.organization_memberships if m.is_active()]
+    
+    def get_organization_role(self, organization_id) -> str:
+        """Get user's role in a specific organization"""
+        for membership in self.organization_memberships:
+            if membership.organization_id == organization_id and membership.is_active():
+                return membership.role
+        return None
+    
+    def is_organization_member(self, organization_id) -> bool:
+        """Check if user is a member of organization"""
+        return self.get_organization_role(organization_id) is not None
+    
+    def is_organization_owner(self, organization_id) -> bool:
+        """Check if user is an owner of organization"""
+        return self.get_organization_role(organization_id) == "owner"
+    
+    def is_organization_admin_or_owner(self, organization_id) -> bool:
+        """Check if user has admin privileges in organization"""
+        role = self.get_organization_role(organization_id)
+        return role in ("owner", "admin") if role else False

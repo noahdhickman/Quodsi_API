@@ -44,10 +44,9 @@ class Organization(BaseEntity):
         comment="Additional organization information (JSON data)",
     )
 
-    # Relationships - will be populated when OrganizationMembership is created
+    # Relationships
     models = relationship("Model", back_populates="organization")
-
-    # memberships = relationship("OrganizationMembership", back_populates="organization")
+    memberships = relationship("OrganizationMembership", back_populates="organization")
 
     @declared_attr
     def __table_args__(cls):
@@ -123,3 +122,29 @@ class Organization(BaseEntity):
         if not self.domain or not email_domain:
             return False
         return self.domain.lower() == email_domain.lower()
+    
+    def user_belongs_to_organization(self, user_email: str) -> bool:
+        """Check if a user email belongs to this organization based on domain"""
+        if not self.domain or not user_email or "@" not in user_email:
+            return False
+        email_domain = user_email.split("@")[1].lower()
+        return self.is_domain_match(email_domain)
+    
+    def get_members(self):
+        """Get active members of this organization"""
+        return [m for m in self.memberships if m.is_active()]
+    
+    def get_owners(self):
+        """Get owners of this organization"""
+        return [m for m in self.memberships if m.is_owner()]
+    
+    def get_user_role(self, user_id) -> str:
+        """Get user's role in this organization"""
+        for membership in self.memberships:
+            if membership.user_id == user_id and membership.is_active():
+                return membership.role
+        return None
+    
+    def get_member_count(self) -> int:
+        """Get count of active members"""
+        return len(self.get_members())

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -19,14 +19,14 @@ class UserSession(BaseEntity):
 
     # Foreign key to users table
     user_id = Column(
-        UUID(as_uuid=True), 
+        UNIQUEIDENTIFIER, 
         ForeignKey("users.id", ondelete="CASCADE"), 
         nullable=False,
         index=True
     )
     
     # Session end time (NULL while session is active)
-    ended_at = Column(DateTime(timezone=True), nullable=True)
+    ended_at = Column(DateTime, nullable=True)
     
     # Duration of session in minutes (calculated when session ends)
     duration_minutes = Column(Integer, nullable=True)

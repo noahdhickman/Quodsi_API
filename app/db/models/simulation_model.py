@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 from sqlalchemy.orm import relationship
 
 from app.db.models.base_entity import BaseEntity
@@ -60,12 +60,12 @@ class Model(BaseEntity):
 
     # Ownership and Association
     created_by_user_id = Column(
-        PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+        UNIQUEIDENTIFIER, ForeignKey("users.id"), nullable=False
     )
     organization_id = Column(
-        PGUUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True
+        UNIQUEIDENTIFIER, ForeignKey("organizations.id"), nullable=True
     )
-    team_id = Column(PGUUID(as_uuid=True), ForeignKey("teams.id"), nullable=True)
+    team_id = Column(UNIQUEIDENTIFIER, ForeignKey("teams.id"), nullable=True)
 
     # Flags
     is_public = Column(Boolean, nullable=False, default=False)

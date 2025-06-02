@@ -10,6 +10,8 @@ from .tenant import Tenant
 from .user import User
 from .user_session import UserSession
 from .organization import Organization
+from .organization_membership import OrganizationMembership
+from .simulation_model import Model
 from .team import Team
 
-__all__ = ["BaseEntity", "Tenant", "User", "UserSession", "Organization"]
+__all__ = ["BaseEntity", "Tenant", "User", "UserSession", "Organization", "OrganizationMembership", "Model", "Team"]
