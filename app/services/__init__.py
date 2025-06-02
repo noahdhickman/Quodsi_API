@@ -1,3 +1,4 @@
+# app/services/__init__.py
 """
 Service layer for business logic coordination.
 
@@ -8,8 +9,13 @@ business logic.
 
 from .registration_service import RegistrationService, get_registration_service
 from .user_service import UserService, get_user_service
+from .organization_service import OrganizationService, get_organization_service
 
 __all__ = [
-    "RegistrationService", "get_registration_service",
-    "UserService", "get_user_service"
+    "RegistrationService",
+    "get_registration_service",
+    "UserService",
+    "get_user_service",
+    "OrganizationService",
+    "get_organization_service",
 ]

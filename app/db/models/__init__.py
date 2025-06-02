@@ -9,5 +9,7 @@ from .base_entity import BaseEntity
 from .tenant import Tenant
 from .user import User
 from .user_session import UserSession
+from .organization import Organization
+from .team import Team
 
-__all__ = ["BaseEntity", "Tenant", "User"]
+__all__ = ["BaseEntity", "Tenant", "User", "UserSession", "Organization"]
