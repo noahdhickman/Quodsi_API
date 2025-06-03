@@ -15,6 +15,7 @@ from .simulation_model import Model
 from .team import Team
 from .model_permission import ModelPermission
 from .model_access_log import ModelAccessLog
+from .analysis import Analysis
 
 __all__ = [
     "BaseEntity", 
@@ -26,5 +27,6 @@ __all__ = [
     "Model", 
     "Team",
     "ModelPermission",
-    "ModelAccessLog"
+    "ModelAccessLog",
+    "Analysis"
 ]

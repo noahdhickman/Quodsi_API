@@ -32,6 +32,7 @@ from app.repositories.organization_membership_repository import (
 )
 from app.repositories.model_repository import ModelRepository
 from app.repositories.model_permission_repository import ModelPermissionRepository
+from app.repositories.analysis_repository import AnalysisRepository
 from app.services.organization_service import OrganizationService
 from app.schemas.tenant import TenantCreate
 from app.schemas.user import UserCreate
@@ -39,6 +40,7 @@ from app.schemas.organization import OrganizationCreate
 from app.schemas.organization_membership import OrganizationMembershipCreate
 from app.schemas.simulation_model import ModelCreate
 from app.schemas.model_permission import PermissionLevel
+from app.schemas.analysis import AnalysisCreate, TimePeriod
 
 # Create database session
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -628,7 +630,63 @@ def seed_model_permissions(db, tenants, all_users, all_organizations, all_models
     db.commit()
 
 
-def print_summary(tenants, all_users, all_organizations, all_models=None):
+def seed_analyses(db, tenants, all_users, all_models):
+    """Create 2 analyses for each model"""
+    analysis_repo = AnalysisRepository()
+    all_analyses = {}
+    
+    # Analysis templates - these will be applied to each model
+    analysis_templates = [
+        {
+            "name": "Baseline Analysis",
+            "description": "Baseline performance analysis with current parameters",
+            "default_reps": 100,
+            "default_time_period": TimePeriod.DAILY
+        },
+        {
+            "name": "Optimization Study",
+            "description": "Performance optimization and bottleneck identification study",
+            "default_reps": 250,
+            "default_time_period": TimePeriod.HOURLY
+        }
+    ]
+    
+    print("Creating analyses...")
+    for tenant in tenants:
+        tenant_users = all_users[tenant.id]
+        tenant_models = all_models[tenant.id]
+        tenant_analyses = []
+        
+        for model in tenant_models:
+            # Create 2 analyses for each model
+            for analysis_idx, analysis_template in enumerate(analysis_templates):
+                # Vary the creator - alternate between users
+                created_by_user = tenant_users[analysis_idx % len(tenant_users)]
+                
+                # Create analysis data
+                analysis_data = {
+                    **analysis_template,
+                    "model_id": model.id,
+                    "created_by_user_id": created_by_user.id
+                }
+                
+                # Create the analysis
+                analysis = analysis_repo.create(
+                    db=db,
+                    obj_in=analysis_data,
+                    tenant_id=tenant.id
+                )
+                tenant_analyses.append(analysis)
+                
+                print(f"  ✓ Created analysis: {analysis.name} for model {model.name} by {created_by_user.display_name}")
+        
+        all_analyses[tenant.id] = tenant_analyses
+    
+    db.commit()
+    return all_analyses
+
+
+def print_summary(tenants, all_users, all_organizations, all_models=None, all_analyses=None):
     """Print a summary of created data"""
     print("\n" + "=" * 60)
     print("DATABASE SEEDING COMPLETE!")
@@ -667,6 +725,28 @@ def print_summary(tenants, all_users, all_organizations, all_models=None):
                     print(f"        Public model - {model.time_type} time")
                 else:
                     print(f"        Private model - {model.time_type} time")
+        
+        if all_analyses and tenant.id in all_analyses:
+            print(f"\n   📊 ANALYSES ({len(all_analyses[tenant.id])}):")
+            # Group analyses by model
+            model_analyses = {}
+            for analysis in all_analyses[tenant.id]:
+                if analysis.model_id not in model_analyses:
+                    model_analyses[analysis.model_id] = []
+                model_analyses[analysis.model_id].append(analysis)
+            
+            for model_id, analyses in model_analyses.items():
+                # Find the model name
+                model_name = "Unknown Model"
+                if all_models and tenant.id in all_models:
+                    for model in all_models[tenant.id]:
+                        if model.id == model_id:
+                            model_name = model.name
+                            break
+                
+                print(f"      📈 {model_name}:")
+                for analysis in analyses:
+                    print(f"        • {analysis.name} ({analysis.default_time_period}, {analysis.default_reps} reps)")
 
     print(f"\n📊 SUMMARY:")
     print(f"   • {len(tenants)} tenants created")
@@ -678,6 +758,9 @@ def print_summary(tenants, all_users, all_organizations, all_models=None):
     if all_models:
         print(f"   • {sum(len(models) for models in all_models.values())} simulation models created")
         print(f"   • Model permissions for sharing and collaboration")
+    if all_analyses:
+        print(f"   • {sum(len(analyses) for analyses in all_analyses.values())} analyses created")
+        print(f"   • 2 analyses per model (Baseline and Optimization)")
     print("\n🎉 Ready for testing!")
 
 
@@ -697,9 +780,12 @@ def main():
             # Seed models and permissions
             all_models = seed_models(db, tenants, all_users, all_organizations)
             seed_model_permissions(db, tenants, all_users, all_organizations, all_models)
+            
+            # Seed analyses
+            all_analyses = seed_analyses(db, tenants, all_users, all_models)
 
             # Print summary
-            print_summary(tenants, all_users, all_organizations, all_models)
+            print_summary(tenants, all_users, all_organizations, all_models, all_analyses)
 
     except Exception as e:
         print(f"❌ Seeding failed: {str(e)}")
