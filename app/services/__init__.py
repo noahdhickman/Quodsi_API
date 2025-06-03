@@ -13,6 +13,7 @@ from .organization_service import OrganizationService, get_organization_service
 from .model_service import ModelService, get_model_service
 from .model_permission_service import ModelPermissionService, get_model_permission_service
 from .analysis_service import AnalysisService, get_analysis_service
+from .scenario_service import ScenarioService, get_scenario_service
 
 __all__ = [
     "RegistrationService",
@@ -27,4 +28,6 @@ __all__ = [
     "get_model_permission_service",
     "AnalysisService",
     "get_analysis_service",
+    "ScenarioService",
+    "get_scenario_service",
 ]

@@ -48,6 +48,7 @@ class User(BaseEntity):
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     created_models = relationship("Model", back_populates="created_by_user")
     analyses = relationship("Analysis", back_populates="created_by_user")
+    scenarios = relationship("Scenario", back_populates="created_by_user")
     organization_memberships = relationship("OrganizationMembership", foreign_keys="OrganizationMembership.user_id", back_populates="user")
     
     # Permission relationships

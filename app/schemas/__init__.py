@@ -85,6 +85,25 @@ from .analysis import (
     AnalysisCopyRequest,
     AnalysisValidationResponse,
 )
+from .scenario import (
+    ScenarioState,
+    ScenarioBase,
+    ScenarioCreate,
+    ScenarioUpdate,
+    ScenarioStateUpdate,
+    ScenarioRead,
+    ScenarioSummary,
+    ScenarioListResponse,
+    ScenarioExecutionRequest,
+    ScenarioExecutionProgress,
+    ScenarioCopyRequest,
+    ScenarioQuery,
+    BulkScenarioCreate,
+    BulkScenarioResponse,
+    ScenarioStatistics,
+    ScenarioValidationResponse,
+    ScenarioExecutionError,
+)
 
 __all__ = [
     "UserSummary",
@@ -158,4 +177,22 @@ __all__ = [
     "AnalysisStatistics",
     "AnalysisCopyRequest",
     "AnalysisValidationResponse",
+    # Scenario schemas
+    "ScenarioState",
+    "ScenarioBase",
+    "ScenarioCreate",
+    "ScenarioUpdate",
+    "ScenarioStateUpdate",
+    "ScenarioRead",
+    "ScenarioSummary",
+    "ScenarioListResponse",
+    "ScenarioExecutionRequest",
+    "ScenarioExecutionProgress",
+    "ScenarioCopyRequest",
+    "ScenarioQuery",
+    "BulkScenarioCreate",
+    "BulkScenarioResponse",
+    "ScenarioStatistics",
+    "ScenarioValidationResponse",
+    "ScenarioExecutionError",
 ]

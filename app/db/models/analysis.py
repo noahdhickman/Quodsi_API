@@ -85,8 +85,7 @@ class Analysis(BaseEntity):
     # Relationships
     model = relationship("Model", back_populates="analyses")
     created_by_user = relationship("User", back_populates="analyses")
-    # Note: scenarios relationship will be added when scenarios table is implemented
-    # scenarios = relationship("Scenario", back_populates="analysis", cascade="all, delete-orphan")
+    scenarios = relationship("Scenario", back_populates="analysis", cascade="all, delete-orphan")
 
     @declared_attr
     def __table_args__(cls):

@@ -33,6 +33,7 @@ from app.repositories.organization_membership_repository import (
 from app.repositories.model_repository import ModelRepository
 from app.repositories.model_permission_repository import ModelPermissionRepository
 from app.repositories.analysis_repository import AnalysisRepository
+from app.repositories.scenario_repository import ScenarioRepository
 from app.services.organization_service import OrganizationService
 from app.schemas.tenant import TenantCreate
 from app.schemas.user import UserCreate
@@ -41,6 +42,7 @@ from app.schemas.organization_membership import OrganizationMembershipCreate
 from app.schemas.simulation_model import ModelCreate
 from app.schemas.model_permission import PermissionLevel
 from app.schemas.analysis import AnalysisCreate, TimePeriod
+from app.schemas.scenario import ScenarioCreate, ScenarioState
 
 # Create database session
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -686,7 +688,92 @@ def seed_analyses(db, tenants, all_users, all_models):
     return all_analyses
 
 
-def print_summary(tenants, all_users, all_organizations, all_models=None, all_analyses=None):
+def seed_scenarios(db, tenants, all_users, all_analyses):
+    """Create 3 scenarios for each analysis"""
+    scenario_repo = ScenarioRepository()
+    all_scenarios = {}
+    
+    # Scenario templates - these will be applied to each analysis
+    scenario_templates = [
+        {
+            "name": "Standard Run",
+            "description": "Standard scenario run with default parameters",
+            "reps": None,  # Will inherit from analysis
+            "time_period": None,  # Will inherit from analysis
+            "state": ScenarioState.NOT_READY_TO_RUN
+        },
+        {
+            "name": "High Volume Test",
+            "description": "High volume scenario for stress testing and capacity planning",
+            "reps": 500,
+            "time_period": TimePeriod.HOURLY,
+            "state": ScenarioState.READY_TO_RUN
+        },
+        {
+            "name": "Quick Validation",
+            "description": "Quick validation run with minimal replications for fast feedback",
+            "reps": 10,
+            "time_period": TimePeriod.DAILY,
+            "state": ScenarioState.RAN_SUCCESS
+        }
+    ]
+    
+    print("Creating scenarios...")
+    for tenant in tenants:
+        tenant_users = all_users[tenant.id]
+        tenant_analyses = all_analyses[tenant.id]
+        tenant_scenarios = []
+        
+        for analysis in tenant_analyses:
+            # Create 3 scenarios for each analysis
+            for scenario_idx, scenario_template in enumerate(scenario_templates):
+                # Vary the creator - cycle through users
+                created_by_user = tenant_users[scenario_idx % len(tenant_users)]
+                
+                # Create scenario data, inheriting from analysis if not specified
+                scenario_data = {
+                    **scenario_template,
+                    "analysis_id": analysis.id,
+                    "created_by_user_id": created_by_user.id
+                }
+                
+                # Inherit defaults from analysis if not specified in template
+                if scenario_data["reps"] is None:
+                    scenario_data["reps"] = analysis.default_reps
+                if scenario_data["time_period"] is None:
+                    scenario_data["time_period"] = analysis.default_time_period
+                
+                # Set total_reps to match reps
+                scenario_data["total_reps"] = scenario_data["reps"]
+                
+                # Add some execution data for the completed scenario
+                if scenario_template["state"] == ScenarioState.RAN_SUCCESS:
+                    scenario_data.update({
+                        "current_rep": scenario_data["reps"],
+                        "progress_percentage": 100.0,
+                        "started_at": datetime.now(timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0),
+                        "completed_at": datetime.now(timezone.utc).replace(hour=10, minute=15, second=30, microsecond=0),
+                        "execution_time_ms": 930000,  # 15.5 minutes
+                        "blob_storage_path": f"results/{tenant.slug}/{analysis.id}/{scenario_template['name'].lower().replace(' ', '_')}/results.json"
+                    })
+                
+                # Create the scenario
+                scenario = scenario_repo.create(
+                    db=db,
+                    obj_in=scenario_data,
+                    tenant_id=tenant.id
+                )
+                tenant_scenarios.append(scenario)
+                
+                print(f"  ✓ Created scenario: {scenario.name} for analysis {analysis.name} by {created_by_user.display_name}")
+        
+        all_scenarios[tenant.id] = tenant_scenarios
+    
+    db.commit()
+    return all_scenarios
+
+
+def print_summary(tenants, all_users, all_organizations, all_models=None, all_analyses=None, all_scenarios=None):
     """Print a summary of created data"""
     print("\n" + "=" * 60)
     print("DATABASE SEEDING COMPLETE!")
@@ -747,6 +834,36 @@ def print_summary(tenants, all_users, all_organizations, all_models=None, all_an
                 print(f"      📈 {model_name}:")
                 for analysis in analyses:
                     print(f"        • {analysis.name} ({analysis.default_time_period}, {analysis.default_reps} reps)")
+        
+        if all_scenarios and tenant.id in all_scenarios:
+            print(f"\n   🎯 SCENARIOS ({len(all_scenarios[tenant.id])}):")
+            # Group scenarios by analysis
+            analysis_scenarios = {}
+            for scenario in all_scenarios[tenant.id]:
+                if scenario.analysis_id not in analysis_scenarios:
+                    analysis_scenarios[scenario.analysis_id] = []
+                analysis_scenarios[scenario.analysis_id].append(scenario)
+            
+            for analysis_id, scenarios in analysis_scenarios.items():
+                # Find the analysis name
+                analysis_name = "Unknown Analysis"
+                if all_analyses and tenant.id in all_analyses:
+                    for analysis in all_analyses[tenant.id]:
+                        if analysis.id == analysis_id:
+                            analysis_name = analysis.name
+                            break
+                
+                print(f"      🎯 {analysis_name}:")
+                for scenario in scenarios:
+                    state_emoji = {
+                        "not_ready_to_run": "⏹️",
+                        "ready_to_run": "▶️",
+                        "is_running": "🔄",
+                        "ran_success": "✅",
+                        "ran_with_errors": "❌",
+                        "cancelling": "⏸️"
+                    }.get(scenario.state, "❓")
+                    print(f"        • {scenario.name} ({scenario.state}) {state_emoji} - {scenario.reps} reps")
 
     print(f"\n📊 SUMMARY:")
     print(f"   • {len(tenants)} tenants created")
@@ -761,6 +878,17 @@ def print_summary(tenants, all_users, all_organizations, all_models=None, all_an
     if all_analyses:
         print(f"   • {sum(len(analyses) for analyses in all_analyses.values())} analyses created")
         print(f"   • 2 analyses per model (Baseline and Optimization)")
+    if all_scenarios:
+        print(f"   • {sum(len(scenarios) for scenarios in all_scenarios.values())} scenarios created")
+        print(f"   • 3 scenarios per analysis (Standard, High Volume, Quick Validation)")
+        
+        # Count scenarios by state
+        state_counts = {}
+        for scenarios in all_scenarios.values():
+            for scenario in scenarios:
+                state_counts[scenario.state] = state_counts.get(scenario.state, 0) + 1
+        
+        print(f"   • Scenario states: {', '.join([f'{count} {state}' for state, count in state_counts.items()])}")
     print("\n🎉 Ready for testing!")
 
 
@@ -783,9 +911,12 @@ def main():
             
             # Seed analyses
             all_analyses = seed_analyses(db, tenants, all_users, all_models)
+            
+            # Seed scenarios
+            all_scenarios = seed_scenarios(db, tenants, all_users, all_analyses)
 
             # Print summary
-            print_summary(tenants, all_users, all_organizations, all_models, all_analyses)
+            print_summary(tenants, all_users, all_organizations, all_models, all_analyses, all_scenarios)
 
     except Exception as e:
         print(f"❌ Seeding failed: {str(e)}")
