@@ -47,6 +47,7 @@ class Organization(BaseEntity):
     # Relationships
     models = relationship("Model", back_populates="organization")
     memberships = relationship("OrganizationMembership", back_populates="organization")
+    received_permissions = relationship("ModelPermission", foreign_keys="ModelPermission.organization_id", back_populates="target_organization")
 
     @declared_attr
     def __table_args__(cls):

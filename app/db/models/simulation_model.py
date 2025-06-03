@@ -82,6 +82,8 @@ class Model(BaseEntity):
     created_by_user = relationship("User", back_populates="created_models")
     organization = relationship("Organization", back_populates="models")
     team = relationship("Team", back_populates="models")
+    permissions = relationship("ModelPermission", back_populates="model", cascade="all, delete-orphan")
+    access_logs = relationship("ModelAccessLog", back_populates="model", cascade="all, delete-orphan")
 
     # Table Constraints
     __table_args__ = (

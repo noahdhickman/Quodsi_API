@@ -13,5 +13,18 @@ from .organization import Organization
 from .organization_membership import OrganizationMembership
 from .simulation_model import Model
 from .team import Team
+from .model_permission import ModelPermission
+from .model_access_log import ModelAccessLog
 
-__all__ = ["BaseEntity", "Tenant", "User", "UserSession", "Organization", "OrganizationMembership", "Model", "Team"]
+__all__ = [
+    "BaseEntity", 
+    "Tenant", 
+    "User", 
+    "UserSession", 
+    "Organization", 
+    "OrganizationMembership", 
+    "Model", 
+    "Team",
+    "ModelPermission",
+    "ModelAccessLog"
+]

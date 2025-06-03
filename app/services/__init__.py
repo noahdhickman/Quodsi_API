@@ -10,6 +10,8 @@ business logic.
 from .registration_service import RegistrationService, get_registration_service
 from .user_service import UserService, get_user_service
 from .organization_service import OrganizationService, get_organization_service
+from .model_service import ModelService, get_model_service
+from .model_permission_service import ModelPermissionService, get_model_permission_service
 
 __all__ = [
     "RegistrationService",
@@ -18,4 +20,8 @@ __all__ = [
     "get_user_service",
     "OrganizationService",
     "get_organization_service",
+    "ModelService",
+    "get_model_service",
+    "ModelPermissionService",
+    "get_model_permission_service",
 ]

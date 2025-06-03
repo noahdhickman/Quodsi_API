@@ -48,6 +48,12 @@ class User(BaseEntity):
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     created_models = relationship("Model", back_populates="created_by_user")
     organization_memberships = relationship("OrganizationMembership", foreign_keys="OrganizationMembership.user_id", back_populates="user")
+    
+    # Permission relationships
+    received_permissions = relationship("ModelPermission", foreign_keys="ModelPermission.user_id", back_populates="target_user")
+    granted_permissions = relationship("ModelPermission", foreign_keys="ModelPermission.granted_by_user_id", back_populates="granted_by")
+    revoked_permissions = relationship("ModelPermission", foreign_keys="ModelPermission.revoked_by_user_id", back_populates="revoked_by")
+    access_logs = relationship("ModelAccessLog", back_populates="user")
 
     # Additional indexes for user-specific queries
     @declared_attr

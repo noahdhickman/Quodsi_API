@@ -13,10 +13,16 @@ from .user_repository import UserRepository, user_repo
 from .user_session_repository import UserSessionRepository
 from .organization_repository import OrganizationRepository
 from .organization_membership_repository import OrganizationMembershipRepository
+from .model_repository import ModelRepository
+from .model_permission_repository import ModelPermissionRepository
+from .model_access_log_repository import ModelAccessLogRepository
 
 # Create singleton instances for dependency injection
 organization_repo = OrganizationRepository()
 organization_membership_repo = OrganizationMembershipRepository()
+model_repo = ModelRepository()
+model_permission_repo = ModelPermissionRepository()
+model_access_log_repo = ModelAccessLogRepository()
 
 __all__ = [
     "BaseRepository",
@@ -29,4 +35,10 @@ __all__ = [
     "organization_repo",
     "OrganizationMembershipRepository",
     "organization_membership_repo",
+    "ModelRepository",
+    "model_repo",
+    "ModelPermissionRepository",
+    "model_permission_repo",
+    "ModelAccessLogRepository",
+    "model_access_log_repo",
 ]

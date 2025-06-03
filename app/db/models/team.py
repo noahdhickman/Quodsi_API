@@ -18,6 +18,7 @@ class Team(BaseEntity):
 
     # Relationships
     models = relationship("Model", back_populates="team")
+    received_permissions = relationship("ModelPermission", foreign_keys="ModelPermission.team_id", back_populates="target_team")
 
     def __repr__(self):
         return f"<Team(id={self.id}, name='{self.name}', tenant_id={self.tenant_id})>"

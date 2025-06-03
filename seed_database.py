@@ -30,11 +30,15 @@ from app.repositories.organization_repository import OrganizationRepository
 from app.repositories.organization_membership_repository import (
     OrganizationMembershipRepository,
 )
+from app.repositories.model_repository import ModelRepository
+from app.repositories.model_permission_repository import ModelPermissionRepository
 from app.services.organization_service import OrganizationService
 from app.schemas.tenant import TenantCreate
 from app.schemas.user import UserCreate
 from app.schemas.organization import OrganizationCreate
 from app.schemas.organization_membership import OrganizationMembershipCreate
+from app.schemas.simulation_model import ModelCreate
+from app.schemas.model_permission import PermissionLevel
 
 # Create database session
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -384,7 +388,247 @@ def seed_organization_memberships(db, tenants, all_users, all_organizations):
     db.commit()
 
 
-def print_summary(tenants, all_users, all_organizations):
+def seed_models(db, tenants, all_users, all_organizations):
+    """Create simulation models for each tenant"""
+    model_repo = ModelRepository()
+    all_models = {}
+    
+    # Model templates for each tenant
+    models_data = {
+        0: [  # Acme Corporation
+            {
+                "name": "Customer Service Process",
+                "description": "Simulation model for customer service workflow optimization",
+                "source": "lucidchart",
+                "source_document_id": "acme_cs_001",
+                "source_url": "https://lucid.app/lucidchart/acme_cs_001",
+                "reps": 100,
+                "forecast_days": 30,
+                "time_type": "clock",
+                "one_clock_unit": "minutes",
+                "run_clock_period": 480.0,  # 8 hours
+                "is_template": False,
+                "is_public": False
+            },
+            {
+                "name": "Product Development Pipeline",
+                "description": "End-to-end product development process model",
+                "source": "standalone",
+                "reps": 50,
+                "forecast_days": 90,
+                "time_type": "calendar",
+                "is_template": True,
+                "is_public": False
+            },
+            {
+                "name": "Manufacturing Line Optimization",
+                "description": "Production line efficiency and bottleneck analysis",
+                "source": "miro",
+                "source_document_id": "acme_mfg_001",
+                "source_url": "https://miro.com/app/board/acme_mfg_001/",
+                "reps": 200,
+                "forecast_days": 7,
+                "time_type": "clock",
+                "one_clock_unit": "hours",
+                "run_clock_period": 24.0,  # 24 hours
+                "is_template": False,
+                "is_public": False
+            }
+        ],
+        1: [  # TechStart Solutions
+            {
+                "name": "Software Development Workflow",
+                "description": "Agile development process simulation",
+                "source": "lucidchart",
+                "source_document_id": "techstart_dev_001",
+                "reps": 75,
+                "forecast_days": 14,
+                "time_type": "calendar",
+                "is_template": False,
+                "is_public": True
+            },
+            {
+                "name": "Customer Onboarding Process",
+                "description": "New customer acquisition and onboarding flow",
+                "source": "standalone",
+                "reps": 25,
+                "forecast_days": 30,
+                "time_type": "clock",
+                "one_clock_unit": "days",
+                "run_clock_period": 30.0,
+                "is_template": True,
+                "is_public": False
+            }
+        ],
+        2: [  # Enterprise Dynamics
+            {
+                "name": "Enterprise Infrastructure Model",
+                "description": "Large-scale system architecture simulation",
+                "source": "lucidchart",
+                "source_document_id": "entdyn_infra_001",
+                "source_url": "https://lucid.app/lucidchart/entdyn_infra_001",
+                "reps": 500,
+                "forecast_days": 365,
+                "time_type": "calendar",
+                "random_seed": 12345,
+                "is_template": False,
+                "is_public": False
+            },
+            {
+                "name": "Risk Assessment Framework",
+                "description": "Enterprise risk evaluation and mitigation model",
+                "source": "standalone",
+                "reps": 150,
+                "forecast_days": 180,
+                "time_type": "clock",
+                "one_clock_unit": "days",
+                "run_clock_period": 180.0,
+                "is_template": True,
+                "is_public": False
+            },
+            {
+                "name": "Supply Chain Management",
+                "description": "Global supply chain optimization model",
+                "source": "miro",
+                "source_document_id": "entdyn_scm_001",
+                "reps": 300,
+                "forecast_days": 60,
+                "time_type": "clock",
+                "one_clock_unit": "hours",
+                "run_clock_period": 168.0,  # 1 week
+                "is_template": False,
+                "is_public": False
+            }
+        ]
+    }
+    
+    print("Creating simulation models...")
+    for tenant_idx, tenant in enumerate(tenants):
+        tenant_models = []
+        tenant_users = all_users[tenant.id]
+        tenant_orgs = all_organizations[tenant.id]
+        
+        for model_idx, model_data in enumerate(models_data[tenant_idx]):
+            # Assign models to different users and organizations
+            created_by_user = tenant_users[model_idx % len(tenant_users)]
+            organization = tenant_orgs[model_idx % len(tenant_orgs)] if model_idx < len(models_data[tenant_idx]) - 1 else None
+            
+            # Prepare model creation data
+            model_create_data = {
+                **model_data,
+                "organization_id": organization.id if organization else None
+            }
+            
+            # Create the schema object first to validate
+            model_create = ModelCreate(**model_create_data)
+            
+            # Add fields that aren't in the schema but are needed for creation
+            create_data = model_create.model_dump()
+            create_data["created_by_user_id"] = created_by_user.id
+            
+            model = model_repo.create(
+                db=db, 
+                obj_in=create_data, 
+                tenant_id=tenant.id
+            )
+            tenant_models.append(model)
+            
+            org_name = organization.name if organization else "Personal"
+            print(f"  ✓ Created model: {model.name} by {created_by_user.display_name} ({org_name})")
+        
+        all_models[tenant.id] = tenant_models
+    
+    db.commit()
+    return all_models
+
+
+def seed_model_permissions(db, tenants, all_users, all_organizations, all_models):
+    """Create model permissions for sharing and collaboration"""
+    permission_repo = ModelPermissionRepository()
+    
+    print("Creating model permissions...")
+    for tenant in tenants:
+        tenant_users = all_users[tenant.id]
+        tenant_orgs = all_organizations[tenant.id]
+        tenant_models = all_models[tenant.id]
+        
+        # Permission scenarios:
+        # 1. Model creators have admin access (implicit, but we'll make it explicit)
+        # 2. Share models with other users in organization
+        # 3. Give organization-level permissions
+        # 4. Cross-user sharing
+        
+        for model_idx, model in enumerate(tenant_models):
+            # 1. Explicit admin permission for model creator
+            permission_repo.grant_permission(
+                db=db,
+                tenant_id=tenant.id,
+                model_id=model.id,
+                permission_level=PermissionLevel.ADMIN,
+                granted_by_user_id=model.created_by_user_id,
+                user_id=model.created_by_user_id,
+                notes="Model creator admin access"
+            )
+            
+            # 2. Share with organization members if model belongs to organization
+            if model.organization_id:
+                # Give organization read access
+                permission_repo.grant_permission(
+                    db=db,
+                    tenant_id=tenant.id,
+                    model_id=model.id,
+                    permission_level=PermissionLevel.READ,
+                    granted_by_user_id=model.created_by_user_id,
+                    organization_id=model.organization_id,
+                    notes="Organization-wide read access"
+                )
+                print(f"    → Granted organization read access to {model.name}")
+            
+            # 3. Give specific users different permission levels
+            for user_idx, user in enumerate(tenant_users):
+                if user.id != model.created_by_user_id:  # Don't duplicate creator permissions
+                    # Rotate permission levels for variety
+                    permission_levels = [PermissionLevel.READ, PermissionLevel.WRITE, PermissionLevel.EXECUTE]
+                    perm_level = permission_levels[(model_idx + user_idx) % len(permission_levels)]
+                    
+                    # Only grant individual permissions for half the models to create variety
+                    if (model_idx + user_idx) % 2 == 0:
+                        permission_repo.grant_permission(
+                            db=db,
+                            tenant_id=tenant.id,
+                            model_id=model.id,
+                            permission_level=perm_level,
+                            granted_by_user_id=model.created_by_user_id,
+                            user_id=user.id,
+                            notes=f"Individual {perm_level.value} access"
+                        )
+                        print(f"    → Granted {perm_level.value} access to {user.display_name} for {model.name}")
+            
+            # 4. Template models get broader access
+            if model.is_template:
+                # Give all users in tenant read access to templates
+                for user in tenant_users:
+                    if user.id != model.created_by_user_id:
+                        # Check if permission already exists
+                        existing_perms = permission_repo.get_user_permissions_for_model(
+                            db, tenant.id, user.id, model.id
+                        )
+                        if not existing_perms:
+                            permission_repo.grant_permission(
+                                db=db,
+                                tenant_id=tenant.id,
+                                model_id=model.id,
+                                permission_level=PermissionLevel.READ,
+                                granted_by_user_id=model.created_by_user_id,
+                                user_id=user.id,
+                                notes="Template access for all users"
+                            )
+                print(f"    → Granted template access to all users for {model.name}")
+    
+    db.commit()
+
+
+def print_summary(tenants, all_users, all_organizations, all_models=None):
     """Print a summary of created data"""
     print("\n" + "=" * 60)
     print("DATABASE SEEDING COMPLETE!")
@@ -413,6 +657,17 @@ def print_summary(tenants, all_users, all_organizations):
             elif "division" in metadata:
                 print(f"        Division: {metadata['division']}")
 
+        if all_models and tenant.id in all_models:
+            print(f"\n   🔧 SIMULATION MODELS ({len(all_models[tenant.id])}):")
+            for model in all_models[tenant.id]:
+                print(f"      • {model.name} ({model.source})")
+                if model.is_template:
+                    print(f"        Template model - {model.time_type} time")
+                elif model.is_public:
+                    print(f"        Public model - {model.time_type} time")
+                else:
+                    print(f"        Private model - {model.time_type} time")
+
     print(f"\n📊 SUMMARY:")
     print(f"   • {len(tenants)} tenants created")
     print(f"   • {sum(len(users) for users in all_users.values())} users created")
@@ -420,6 +675,9 @@ def print_summary(tenants, all_users, all_organizations):
         f"   • {sum(len(orgs) for orgs in all_organizations.values())} organizations created"
     )
     print(f"   • Organization memberships with owner/admin/member roles")
+    if all_models:
+        print(f"   • {sum(len(models) for models in all_models.values())} simulation models created")
+        print(f"   • Model permissions for sharing and collaboration")
     print("\n🎉 Ready for testing!")
 
 
@@ -435,9 +693,13 @@ def main():
             all_users = seed_users(db, tenants)
             all_organizations = seed_organizations(db, tenants, all_users)
             seed_organization_memberships(db, tenants, all_users, all_organizations)
+            
+            # Seed models and permissions
+            all_models = seed_models(db, tenants, all_users, all_organizations)
+            seed_model_permissions(db, tenants, all_users, all_organizations, all_models)
 
             # Print summary
-            print_summary(tenants, all_users, all_organizations)
+            print_summary(tenants, all_users, all_organizations, all_models)
 
     except Exception as e:
         print(f"❌ Seeding failed: {str(e)}")
