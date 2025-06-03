@@ -17,6 +17,7 @@ from .model_permission import ModelPermission
 from .model_access_log import ModelAccessLog
 from .analysis import Analysis
 from .scenario import Scenario
+from .scenario_item_profile import ScenarioItemProfile
 
 __all__ = [
     "BaseEntity", 
@@ -30,5 +31,6 @@ __all__ = [
     "ModelPermission",
     "ModelAccessLog",
     "Analysis",
-    "Scenario"
+    "Scenario",
+    "ScenarioItemProfile"
 ]

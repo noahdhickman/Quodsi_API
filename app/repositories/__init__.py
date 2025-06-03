@@ -18,6 +18,7 @@ from .model_permission_repository import ModelPermissionRepository
 from .model_access_log_repository import ModelAccessLogRepository
 from .analysis_repository import AnalysisRepository
 from .scenario_repository import ScenarioRepository
+from .scenario_item_profile_repository import ScenarioItemProfileRepository
 
 # Create singleton instances for dependency injection
 organization_repo = OrganizationRepository()
@@ -27,6 +28,7 @@ model_permission_repo = ModelPermissionRepository()
 model_access_log_repo = ModelAccessLogRepository()
 analysis_repo = AnalysisRepository()
 scenario_repo = ScenarioRepository()
+scenario_item_profile_repo = ScenarioItemProfileRepository()
 
 __all__ = [
     "BaseRepository",
@@ -49,4 +51,6 @@ __all__ = [
     "analysis_repo",
     "ScenarioRepository",
     "scenario_repo",
+    "ScenarioItemProfileRepository",
+    "scenario_item_profile_repo",
 ]

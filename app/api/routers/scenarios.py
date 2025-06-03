@@ -21,6 +21,12 @@ from app.schemas.scenario import (
     ScenarioValidationResponse, ScenarioExecutionRequest, ScenarioState,
     ScenarioExecutionProgress, TimePeriod, ScenarioStateUpdate
 )
+from app.schemas.scenario_item_profile import (
+    ScenarioItemProfileCreate, ScenarioItemProfileUpdate, ScenarioItemProfileRead,
+    ScenarioItemProfileListResponse, ScenarioItemProfileBulkCreate, 
+    ScenarioItemProfileBulkResponse, ProfileValidationResponse,
+    ScenarioProfileApplicationResult, TargetObjectType
+)
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -773,3 +779,377 @@ async def get_current_user_scenarios(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error getting user scenarios"
         )
+
+
+# === ScenarioItemProfile Endpoints ===
+
+@router.post("/{scenario_id}/profiles", response_model=ScenarioItemProfileRead, status_code=status.HTTP_201_CREATED)
+async def add_profile_to_scenario(
+    scenario_id: UUID,
+    profile_data: ScenarioItemProfileCreate,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Add a parameter override to a scenario.
+    
+    Creates a new parameter override for a specific model component
+    within the scenario, enabling "what-if" analysis.
+    """
+    try:
+        profile = scenario_service.add_item_profile_to_scenario(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            scenario_id=scenario_id,
+            profile_create=profile_data,
+            current_user_id=current_user.user_id
+        )
+        
+        logger.info(f"Profile created via API for scenario {scenario_id} by user {current_user.user_id}")
+        return profile
+        
+    except ValueError as e:
+        logger.warning(f"Profile creation validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        logger.warning(f"Profile creation permission error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error creating profile: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error creating profile"
+        )
+
+
+@router.get("/{scenario_id}/profiles", response_model=ScenarioItemProfileListResponse)
+async def list_scenario_profiles(
+    scenario_id: UUID,
+    skip: int = Query(0, ge=0, description="Number of profiles to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of profiles to return"),
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    List all parameter overrides for a scenario.
+    
+    Returns all parameter overrides defined for the specified scenario,
+    ordered by object type, object ID, and property name.
+    """
+    try:
+        profiles = scenario_service.get_item_profiles_for_scenario(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            scenario_id=scenario_id,
+            current_user_id=current_user.user_id
+        )
+        
+        # Apply pagination
+        paginated_profiles = profiles[skip:skip + limit]
+        
+        return ScenarioItemProfileListResponse(
+            profiles=paginated_profiles,
+            total=len(profiles),
+            skip=skip,
+            limit=limit
+        )
+        
+    except ValueError as e:
+        logger.warning(f"Scenario validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error listing profiles for scenario {scenario_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error listing profiles"
+        )
+
+
+@router.get("/{scenario_id}/profiles/{profile_id}", response_model=ScenarioItemProfileRead)
+async def get_scenario_profile(
+    scenario_id: UUID,
+    profile_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Get a specific parameter override by ID.
+    
+    Returns detailed information about a specific parameter override,
+    including original and new values.
+    """
+    try:
+        # Get all profiles for the scenario and find the specific one
+        profiles = scenario_service.get_item_profiles_for_scenario(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            scenario_id=scenario_id,
+            current_user_id=current_user.user_id
+        )
+        
+        profile = next((p for p in profiles if p.id == profile_id), None)
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Profile {profile_id} not found in scenario {scenario_id}"
+            )
+        
+        return profile
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving profile {profile_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error retrieving profile"
+        )
+
+
+@router.put("/{scenario_id}/profiles/{profile_id}", response_model=ScenarioItemProfileRead)
+async def update_scenario_profile(
+    scenario_id: UUID,
+    profile_id: UUID,
+    profile_data: ScenarioItemProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Update a parameter override.
+    
+    Updates the value, description, or change reason for an existing
+    parameter override. Only modifiable when scenario is not running.
+    """
+    try:
+        updated_profile = scenario_service.update_item_profile(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            profile_id=profile_id,
+            profile_update=profile_data,
+            current_user_id=current_user.user_id
+        )
+        
+        if not updated_profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Profile {profile_id} not found"
+            )
+        
+        logger.info(f"Profile updated via API: {profile_id} by user {current_user.user_id}")
+        return updated_profile
+        
+    except ValueError as e:
+        logger.warning(f"Profile update validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        logger.warning(f"Profile update permission error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error updating profile {profile_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error updating profile"
+        )
+
+
+@router.delete("/{scenario_id}/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_scenario_profile(
+    scenario_id: UUID,
+    profile_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Remove a parameter override from a scenario.
+    
+    Soft deletes the parameter override. Cannot be done while
+    the scenario is running or completed.
+    """
+    try:
+        deleted = scenario_service.remove_item_profile(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            profile_id=profile_id,
+            current_user_id=current_user.user_id
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Profile {profile_id} not found"
+            )
+        
+        logger.info(f"Profile deleted via API: {profile_id} by user {current_user.user_id}")
+        
+    except ValueError as e:
+        logger.warning(f"Profile deletion validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        logger.warning(f"Profile deletion permission error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting profile {profile_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error deleting profile"
+        )
+
+
+@router.post("/{scenario_id}/profiles/bulk", response_model=ScenarioItemProfileBulkResponse, status_code=status.HTTP_201_CREATED)
+async def bulk_create_scenario_profiles(
+    scenario_id: UUID,
+    bulk_request: ScenarioItemProfileBulkCreate,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Create multiple parameter overrides in bulk.
+    
+    Efficiently creates multiple parameter overrides for the same scenario
+    with individual success/failure tracking.
+    """
+    try:
+        # Override the scenario_id in the request with the path parameter
+        bulk_request.scenario_id = scenario_id
+        
+        result = scenario_service.bulk_create_item_profiles(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            bulk_request=bulk_request,
+            current_user_id=current_user.user_id
+        )
+        
+        logger.info(f"Bulk profile creation via API: {result.total_successful}/{result.total_requested} successful for scenario {scenario_id}")
+        return result
+        
+    except ValueError as e:
+        logger.warning(f"Bulk profile creation validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        logger.warning(f"Bulk profile creation permission error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in bulk profile creation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error in bulk profile creation"
+        )
+
+
+@router.post("/{scenario_id}/profiles/validate", response_model=ProfileValidationResponse)
+async def validate_scenario_profile(
+    scenario_id: UUID,
+    profile_data: ScenarioItemProfileCreate,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Validate a parameter override without creating it.
+    
+    Performs all validation checks (target object existence, property validity,
+    value compatibility, etc.) and returns detailed validation results.
+    """
+    try:
+        validation_result = scenario_service.validate_item_profile(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            scenario_id=scenario_id,
+            profile_create=profile_data,
+            current_user_id=current_user.user_id
+        )
+        
+        return validation_result
+        
+    except Exception as e:
+        logger.error(f"Unexpected error validating profile: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error validating profile"
+        )
+
+
+@router.post("/{scenario_id}/apply-profiles", response_model=ScenarioProfileApplicationResult)
+async def apply_scenario_profiles(
+    scenario_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: MockCurrentUser = Depends(get_current_user_mock),
+    scenario_service: ScenarioService = Depends(get_scenario_service)
+):
+    """
+    Apply all parameter overrides to produce simulation configuration.
+    
+    Fetches the base model configuration and applies all parameter
+    overrides to produce the final configuration for simulation execution.
+    This endpoint would typically be called by the simulation engine.
+    """
+    try:
+        result = scenario_service.apply_scenario_profiles_to_model_data(
+            db=db,
+            tenant_id=current_user.tenant_id,
+            scenario_id=scenario_id,
+            current_user_id=current_user.user_id
+        )
+        
+        logger.info(f"Applied {result.applied_profiles_count} profiles for scenario {scenario_id}")
+        return result
+        
+    except ValueError as e:
+        logger.warning(f"Profile application error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error applying profiles for scenario {scenario_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error applying profiles"
+        )
+
+
+@router.get("/object-types", response_model=List[str])
+async def get_available_object_types():
+    """
+    Get list of available target object types for parameter overrides.
+    
+    Returns the allowed values for target_object_type field.
+    """
+    return [obj_type.value for obj_type in TargetObjectType]

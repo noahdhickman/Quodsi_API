@@ -159,8 +159,7 @@ class Scenario(BaseEntity):
     # Relationships
     analysis = relationship("Analysis", back_populates="scenarios")
     created_by_user = relationship("User", back_populates="scenarios")
-    # Note: item_profiles relationship will be added when ScenarioItemProfile is implemented
-    # item_profiles = relationship("ScenarioItemProfile", back_populates="scenario", cascade="all, delete-orphan")
+    item_profiles = relationship("ScenarioItemProfile", back_populates="scenario", cascade="all, delete-orphan")
 
     @declared_attr
     def __table_args__(cls):

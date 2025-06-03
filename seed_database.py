@@ -34,6 +34,7 @@ from app.repositories.model_repository import ModelRepository
 from app.repositories.model_permission_repository import ModelPermissionRepository
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.scenario_repository import ScenarioRepository
+from app.repositories.scenario_item_profile_repository import ScenarioItemProfileRepository
 from app.services.organization_service import OrganizationService
 from app.schemas.tenant import TenantCreate
 from app.schemas.user import UserCreate
@@ -43,6 +44,7 @@ from app.schemas.simulation_model import ModelCreate
 from app.schemas.model_permission import PermissionLevel
 from app.schemas.analysis import AnalysisCreate, TimePeriod
 from app.schemas.scenario import ScenarioCreate, ScenarioState
+from app.schemas.scenario_item_profile import ScenarioItemProfileCreate, TargetObjectType
 
 # Create database session
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -773,7 +775,90 @@ def seed_scenarios(db, tenants, all_users, all_analyses):
     return all_scenarios
 
 
-def print_summary(tenants, all_users, all_organizations, all_models=None, all_analyses=None, all_scenarios=None):
+def seed_scenario_item_profiles(db, tenants, all_scenarios):
+    """Create 3 parameter overrides for each scenario"""
+    profile_repo = ScenarioItemProfileRepository()
+    all_profiles = {}
+    
+    # Profile templates - these represent common parameter overrides
+    profile_templates = [
+        {
+            "target_object_type": TargetObjectType.ACTIVITY,
+            "property_name": "processing_time",
+            "property_value": "15",
+            "original_value": "10",
+            "description": "Increased processing time to simulate higher workload",
+            "change_reason": "Testing impact of slower processing on overall throughput"
+        },
+        {
+            "target_object_type": TargetObjectType.RESOURCE,
+            "property_name": "capacity",
+            "property_value": "5",
+            "original_value": "3",
+            "description": "Increased resource capacity to handle higher demand",
+            "change_reason": "Evaluating cost-benefit of additional resources"
+        },
+        {
+            "target_object_type": TargetObjectType.QUEUE,
+            "property_name": "max_size",
+            "property_value": "100",
+            "original_value": "50",
+            "description": "Doubled queue size to reduce blocking",
+            "change_reason": "Testing queue overflow scenarios"
+        }
+    ]
+    
+    print("Creating scenario item profiles...")
+    for tenant in tenants:
+        tenant_scenarios = all_scenarios[tenant.id]
+        tenant_profiles = []
+        
+        for scenario in tenant_scenarios:
+            # Create 3 profiles for each scenario
+            for profile_idx, profile_template in enumerate(profile_templates):
+                # Generate unique target object IDs for each scenario/profile combo
+                # In a real system, these would reference actual model components
+                target_object_id = uuid4()
+                
+                # Create profile data
+                profile_data = {
+                    **profile_template,
+                    "scenario_id": scenario.id,
+                    "target_object_id": target_object_id
+                }
+                
+                # Vary some values based on scenario type
+                if "High Volume" in scenario.name:
+                    # Adjust values for high volume scenarios
+                    if profile_template["property_name"] == "processing_time":
+                        profile_data["property_value"] = "8"  # Faster processing for high volume
+                        profile_data["description"] = "Reduced processing time for high volume throughput"
+                    elif profile_template["property_name"] == "capacity":
+                        profile_data["property_value"] = "10"  # Much higher capacity
+                        profile_data["description"] = "Significantly increased capacity for high volume testing"
+                elif "Quick Validation" in scenario.name:
+                    # Keep original values for quick validation
+                    if profile_template["property_name"] == "processing_time":
+                        profile_data["property_value"] = profile_data["original_value"]
+                        profile_data["description"] = "Using baseline processing time for validation"
+                
+                # Create the profile
+                profile = profile_repo.create(
+                    db=db,
+                    obj_in=profile_data,
+                    tenant_id=tenant.id
+                )
+                tenant_profiles.append(profile)
+                
+                print(f"  ✓ Created profile: {profile.target_object_type}.{profile.property_name} = {profile.property_value} for {scenario.name}")
+        
+        all_profiles[tenant.id] = tenant_profiles
+    
+    db.commit()
+    return all_profiles
+
+
+def print_summary(tenants, all_users, all_organizations, all_models=None, all_analyses=None, all_scenarios=None, all_profiles=None):
     """Print a summary of created data"""
     print("\n" + "=" * 60)
     print("DATABASE SEEDING COMPLETE!")
@@ -864,6 +949,13 @@ def print_summary(tenants, all_users, all_organizations, all_models=None, all_an
                         "cancelling": "⏸️"
                     }.get(scenario.state, "❓")
                     print(f"        • {scenario.name} ({scenario.state}) {state_emoji} - {scenario.reps} reps")
+                    
+                    # Show profiles if available
+                    if all_profiles and tenant.id in all_profiles:
+                        scenario_profiles = [p for p in all_profiles[tenant.id] if p.scenario_id == scenario.id]
+                        if scenario_profiles:
+                            for profile in scenario_profiles:
+                                print(f"          → {profile.target_object_type}.{profile.property_name}: {profile.original_value} → {profile.property_value}")
 
     print(f"\n📊 SUMMARY:")
     print(f"   • {len(tenants)} tenants created")
@@ -889,6 +981,17 @@ def print_summary(tenants, all_users, all_organizations, all_models=None, all_an
                 state_counts[scenario.state] = state_counts.get(scenario.state, 0) + 1
         
         print(f"   • Scenario states: {', '.join([f'{count} {state}' for state, count in state_counts.items()])}")
+    if all_profiles:
+        print(f"   • {sum(len(profiles) for profiles in all_profiles.values())} scenario item profiles created")
+        print(f"   • 3 parameter overrides per scenario (activity, resource, queue)")
+        
+        # Count profiles by type
+        type_counts = {}
+        for profiles in all_profiles.values():
+            for profile in profiles:
+                type_counts[profile.target_object_type] = type_counts.get(profile.target_object_type, 0) + 1
+        
+        print(f"   • Profile types: {', '.join([f'{count} {ptype}' for ptype, count in type_counts.items()])}")
     print("\n🎉 Ready for testing!")
 
 
@@ -914,9 +1017,12 @@ def main():
             
             # Seed scenarios
             all_scenarios = seed_scenarios(db, tenants, all_users, all_analyses)
+            
+            # Seed scenario item profiles
+            all_profiles = seed_scenario_item_profiles(db, tenants, all_scenarios)
 
             # Print summary
-            print_summary(tenants, all_users, all_organizations, all_models, all_analyses, all_scenarios)
+            print_summary(tenants, all_users, all_organizations, all_models, all_analyses, all_scenarios, all_profiles)
 
     except Exception as e:
         print(f"❌ Seeding failed: {str(e)}")

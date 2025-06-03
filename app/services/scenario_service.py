@@ -24,6 +24,7 @@ from app.repositories.scenario_repository import ScenarioRepository
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.model_repository import ModelRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.scenario_item_profile_repository import ScenarioItemProfileRepository
 from app.schemas.scenario import (
     ScenarioCreate, ScenarioUpdate, ScenarioRead, ScenarioSummary,
     ScenarioStateUpdate, ScenarioQuery, ScenarioStatistics, 
@@ -31,7 +32,14 @@ from app.schemas.scenario import (
     ScenarioValidationResponse, ScenarioExecutionRequest, 
     ScenarioExecutionProgress, ScenarioState, TimePeriod
 )
+from app.schemas.scenario_item_profile import (
+    ScenarioItemProfileCreate, ScenarioItemProfileUpdate, ScenarioItemProfileRead,
+    ScenarioItemProfileBulkCreate, ScenarioItemProfileBulkResponse,
+    ProfileValidationResponse, ScenarioProfileApplicationResult,
+    TargetObjectType
+)
 from app.db.models.scenario import Scenario
+from app.db.models.scenario_item_profile import ScenarioItemProfile
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -45,6 +53,7 @@ class ScenarioService:
         self.analysis_repo = AnalysisRepository()
         self.model_repo = ModelRepository()
         self.user_repo = UserRepository()
+        self.profile_repo = ScenarioItemProfileRepository()
     
     def create_scenario(
         self,
@@ -959,6 +968,448 @@ class ScenarioService:
             total_requested=len(bulk_request.scenarios),
             total_successful=len(successful_scenarios),
             total_failed=len(failed_scenarios)
+        )
+    
+    # === ScenarioItemProfile Methods ===
+    
+    def add_item_profile_to_scenario(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        scenario_id: UUID,
+        profile_create: ScenarioItemProfileCreate,
+        current_user_id: UUID
+    ) -> ScenarioItemProfileRead:
+        """
+        Add a parameter override to a scenario.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            scenario_id: Scenario ID to add profile to
+            profile_create: Profile creation data
+            current_user_id: User creating the profile
+            
+        Returns:
+            Created profile
+            
+        Raises:
+            ValueError: If validation fails
+            PermissionError: If user lacks permission
+        """
+        try:
+            # Validate the scenario exists and belongs to tenant
+            scenario = self.scenario_repo.get_by_id(db, tenant_id, scenario_id)
+            if not scenario:
+                raise ValueError(f"Scenario {scenario_id} not found in tenant {tenant_id}")
+            
+            # Check if user has permission to modify scenario
+            if not scenario.is_editable_by_user(current_user_id):
+                raise PermissionError("User does not have permission to modify this scenario")
+            
+            # Check if scenario can be modified
+            if not scenario.can_be_modified():
+                raise ValueError(f"Scenario cannot be modified while in '{scenario.state}' state")
+            
+            # Check if profile already exists for this target/property
+            existing_profile = self.profile_repo.get_profile_for_target_property(
+                db, tenant_id, scenario_id, 
+                profile_create.target_object_id,
+                profile_create.property_name
+            )
+            if existing_profile:
+                raise ValueError(
+                    f"Profile already exists for object {profile_create.target_object_id}, "
+                    f"property {profile_create.property_name}"
+                )
+            
+            # TODO: Validate target_object_id exists in the parent model
+            # This would require integration with the model service
+            
+            # Create the profile
+            profile_data = profile_create.model_dump()
+            profile_data["scenario_id"] = scenario_id
+            
+            profile = self.profile_repo.create(
+                db=db,
+                obj_in=profile_data,
+                tenant_id=tenant_id
+            )
+            
+            logger.info(
+                f"Created item profile for scenario {scenario_id}: "
+                f"{profile.target_object_type}.{profile.property_name}"
+            )
+            
+            return ScenarioItemProfileRead.model_validate(profile)
+            
+        except Exception as e:
+            logger.error(f"Error adding item profile to scenario {scenario_id}: {e}")
+            raise
+    
+    def update_item_profile(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        profile_id: UUID,
+        profile_update: ScenarioItemProfileUpdate,
+        current_user_id: UUID
+    ) -> Optional[ScenarioItemProfileRead]:
+        """
+        Update a scenario item profile.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            profile_id: Profile ID to update
+            profile_update: Update data
+            current_user_id: User performing the update
+            
+        Returns:
+            Updated profile if successful, None if not found
+            
+        Raises:
+            PermissionError: If user lacks permission
+            ValueError: If validation fails
+        """
+        try:
+            # Get the existing profile
+            profile = self.profile_repo.get_by_id(db, tenant_id, profile_id)
+            if not profile:
+                return None
+            
+            # Get the parent scenario to check permissions
+            scenario = self.scenario_repo.get_by_id(db, tenant_id, profile.scenario_id)
+            if not scenario:
+                raise ValueError("Parent scenario not found")
+            
+            # Check permissions
+            if not scenario.is_editable_by_user(current_user_id):
+                raise PermissionError("User does not have permission to modify this scenario")
+            
+            # Check if scenario can be modified
+            if not scenario.can_be_modified():
+                raise ValueError(f"Scenario cannot be modified while in '{scenario.state}' state")
+            
+            # Update the profile
+            update_data = profile_update.model_dump(exclude_unset=True)
+            updated_profile = self.profile_repo.update(
+                db=db,
+                db_obj=profile,
+                obj_in=update_data
+            )
+            
+            logger.info(f"Updated item profile {profile_id}")
+            
+            return ScenarioItemProfileRead.model_validate(updated_profile)
+            
+        except Exception as e:
+            logger.error(f"Error updating item profile {profile_id}: {e}")
+            raise
+    
+    def remove_item_profile(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        profile_id: UUID,
+        current_user_id: UUID
+    ) -> bool:
+        """
+        Remove a scenario item profile.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            profile_id: Profile ID to remove
+            current_user_id: User performing the removal
+            
+        Returns:
+            True if removed successfully, False if not found
+            
+        Raises:
+            PermissionError: If user lacks permission
+            ValueError: If profile cannot be removed
+        """
+        try:
+            # Get the existing profile
+            profile = self.profile_repo.get_by_id(db, tenant_id, profile_id)
+            if not profile:
+                return False
+            
+            # Get the parent scenario to check permissions
+            scenario = self.scenario_repo.get_by_id(db, tenant_id, profile.scenario_id)
+            if not scenario:
+                raise ValueError("Parent scenario not found")
+            
+            # Check permissions
+            if not scenario.is_editable_by_user(current_user_id):
+                raise PermissionError("User does not have permission to modify this scenario")
+            
+            # Check if scenario can be modified
+            if not scenario.can_be_modified():
+                raise ValueError(f"Scenario cannot be modified while in '{scenario.state}' state")
+            
+            # Soft delete the profile
+            deleted = self.profile_repo.soft_delete(db, tenant_id, profile_id)
+            
+            if deleted:
+                logger.info(f"Removed item profile {profile_id}")
+            
+            return deleted
+            
+        except Exception as e:
+            logger.error(f"Error removing item profile {profile_id}: {e}")
+            raise
+    
+    def get_item_profiles_for_scenario(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        scenario_id: UUID,
+        current_user_id: Optional[UUID] = None
+    ) -> List[ScenarioItemProfileRead]:
+        """
+        Get all item profiles for a scenario.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            scenario_id: Scenario ID to get profiles for
+            current_user_id: Optional user ID for permission checking
+            
+        Returns:
+            List of scenario item profiles
+        """
+        try:
+            # Validate scenario exists
+            scenario = self.scenario_repo.get_by_id(db, tenant_id, scenario_id)
+            if not scenario:
+                raise ValueError(f"Scenario {scenario_id} not found in tenant {tenant_id}")
+            
+            # TODO: Check permissions when permission system is integrated
+            
+            # Get profiles
+            profiles = self.profile_repo.get_profiles_for_scenario(db, tenant_id, scenario_id)
+            
+            return [ScenarioItemProfileRead.model_validate(profile) for profile in profiles]
+            
+        except Exception as e:
+            logger.error(f"Error getting item profiles for scenario {scenario_id}: {e}")
+            raise
+    
+    def bulk_create_item_profiles(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        bulk_request: ScenarioItemProfileBulkCreate,
+        current_user_id: UUID
+    ) -> ScenarioItemProfileBulkResponse:
+        """
+        Create multiple item profiles in bulk.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            bulk_request: Bulk creation request
+            current_user_id: User creating the profiles
+            
+        Returns:
+            Bulk operation response with success/failure details
+        """
+        successful_profiles = []
+        failed_profiles = []
+        
+        # Validate scenario once
+        scenario = self.scenario_repo.get_by_id(db, tenant_id, bulk_request.scenario_id)
+        if not scenario:
+            raise ValueError(f"Scenario {bulk_request.scenario_id} not found")
+        
+        if not scenario.is_editable_by_user(current_user_id):
+            raise PermissionError("User does not have permission to modify this scenario")
+        
+        if not scenario.can_be_modified():
+            raise ValueError(f"Scenario cannot be modified while in '{scenario.state}' state")
+        
+        for profile_base in bulk_request.profiles:
+            try:
+                # Convert base to create schema
+                profile_create = ScenarioItemProfileCreate(**profile_base.model_dump())
+                
+                created_profile = self.add_item_profile_to_scenario(
+                    db, tenant_id, bulk_request.scenario_id, 
+                    profile_create, current_user_id
+                )
+                successful_profiles.append(created_profile.id)
+            except Exception as e:
+                failed_profiles.append({
+                    "target_object_id": str(profile_base.target_object_id),
+                    "property_name": profile_base.property_name,
+                    "error": str(e)
+                })
+        
+        return ScenarioItemProfileBulkResponse(
+            successful_profiles=successful_profiles,
+            failed_profiles=failed_profiles,
+            total_requested=len(bulk_request.profiles),
+            total_successful=len(successful_profiles),
+            total_failed=len(failed_profiles)
+        )
+    
+    def apply_scenario_profiles_to_model_data(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        scenario_id: UUID,
+        current_user_id: Optional[UUID] = None
+    ) -> ScenarioProfileApplicationResult:
+        """
+        Apply scenario profiles to model data to produce configuration for simulation.
+        
+        This method would fetch the base model configuration and then overlay
+        the scenario_item_profiles to produce the specific configuration for
+        this scenario run.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            scenario_id: Scenario ID to apply profiles for
+            current_user_id: Optional user ID for permission checking
+            
+        Returns:
+            Result of applying profiles to model data
+        """
+        try:
+            # Get the scenario
+            scenario = self.scenario_repo.get_by_id(db, tenant_id, scenario_id)
+            if not scenario:
+                raise ValueError(f"Scenario {scenario_id} not found")
+            
+            # Get the parent analysis
+            analysis = self.analysis_repo.get_by_id(db, tenant_id, scenario.analysis_id)
+            if not analysis:
+                raise ValueError("Parent analysis not found")
+            
+            # Get the base model
+            model = self.model_repo.get_by_id(db, tenant_id, analysis.model_id)
+            if not model:
+                raise ValueError("Base model not found")
+            
+            # Get all profiles for the scenario
+            profiles = self.profile_repo.get_profiles_for_scenario(db, tenant_id, scenario_id)
+            
+            # TODO: This is where you would:
+            # 1. Load the base model configuration (from blob storage or database)
+            # 2. Parse the model structure
+            # 3. Apply each profile override to the appropriate component
+            # 4. Validate the resulting configuration
+            # 5. Return the modified configuration
+            
+            # For now, return a placeholder result
+            modified_objects = []
+            for profile in profiles:
+                modified_objects.append({
+                    "object_id": str(profile.target_object_id),
+                    "object_type": profile.target_object_type,
+                    "property": profile.property_name,
+                    "original_value": profile.original_value,
+                    "new_value": profile.property_value
+                })
+            
+            return ScenarioProfileApplicationResult(
+                scenario_id=scenario_id,
+                base_model_id=model.id,
+                applied_profiles_count=len(profiles),
+                modified_objects=modified_objects,
+                validation_errors=[],
+                warnings=[],
+                result_configuration={}  # Would contain the actual modified model config
+            )
+            
+        except Exception as e:
+            logger.error(f"Error applying scenario profiles: {e}")
+            raise
+    
+    def validate_item_profile(
+        self,
+        db: Session,
+        tenant_id: UUID,
+        scenario_id: UUID,
+        profile_create: ScenarioItemProfileCreate,
+        current_user_id: UUID
+    ) -> ProfileValidationResponse:
+        """
+        Validate an item profile without creating it.
+        
+        Args:
+            db: Database session
+            tenant_id: Tenant ID for isolation
+            scenario_id: Scenario ID the profile would belong to
+            profile_create: Profile data to validate
+            current_user_id: User who would create the profile
+            
+        Returns:
+            Validation response with errors and warnings
+        """
+        validation_errors = []
+        warnings = []
+        
+        # Check scenario exists
+        scenario = self.scenario_repo.get_by_id(db, tenant_id, scenario_id)
+        if not scenario:
+            validation_errors.append(f"Scenario {scenario_id} not found")
+            return ProfileValidationResponse(
+                is_valid=False,
+                validation_errors=validation_errors,
+                warnings=warnings,
+                target_object_exists=False,
+                property_exists=False,
+                value_type_compatible=False,
+                conflicts_with_existing=False
+            )
+        
+        # Check permissions
+        if not scenario.is_editable_by_user(current_user_id):
+            validation_errors.append("User does not have permission to modify this scenario")
+        
+        # Check scenario state
+        if not scenario.can_be_modified():
+            validation_errors.append(f"Scenario cannot be modified while in '{scenario.state}' state")
+        
+        # Check for existing profile
+        existing_profile = self.profile_repo.check_profile_exists(
+            db, tenant_id, scenario_id,
+            profile_create.target_object_id,
+            profile_create.property_name
+        )
+        conflicts_with_existing = existing_profile
+        if conflicts_with_existing:
+            validation_errors.append(
+                f"Profile already exists for object {profile_create.target_object_id}, "
+                f"property {profile_create.property_name}"
+            )
+        
+        # TODO: When model service is integrated:
+        # - Check if target_object_id exists in the model
+        # - Check if property_name is valid for the object type
+        # - Check if property_value is compatible with the property type
+        
+        # For now, we'll assume these are true
+        target_object_exists = True
+        property_exists = True
+        value_type_compatible = True
+        
+        # Add warnings for common issues
+        if profile_create.property_value.isdigit() and int(profile_create.property_value) > 1000000:
+            warnings.append("Very large numeric value may impact performance")
+        
+        return ProfileValidationResponse(
+            is_valid=len(validation_errors) == 0,
+            validation_errors=validation_errors,
+            warnings=warnings,
+            target_object_exists=target_object_exists,
+            property_exists=property_exists,
+            value_type_compatible=value_type_compatible,
+            conflicts_with_existing=conflicts_with_existing
         )
 
 

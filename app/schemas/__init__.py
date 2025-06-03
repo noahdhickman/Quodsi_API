@@ -104,6 +104,24 @@ from .scenario import (
     ScenarioValidationResponse,
     ScenarioExecutionError,
 )
+from .scenario_item_profile import (
+    TargetObjectType,
+    ScenarioItemProfileBase,
+    ScenarioItemProfileCreate,
+    ScenarioItemProfileUpdate,
+    ScenarioItemProfileRead,
+    ScenarioItemProfileSummary,
+    ScenarioItemProfileBulkCreate,
+    ScenarioItemProfileBulkResponse,
+    ScenarioItemProfileQuery,
+    ProfilesByTargetResponse,
+    ProfileValidationResponse,
+    ProfileComparisonResponse,
+    ScenarioProfileApplicationResult,
+    ScenarioItemProfileListResponse,
+    ScenarioItemProfileExport,
+    ScenarioItemProfileImport,
+)
 
 __all__ = [
     "UserSummary",
@@ -195,4 +213,21 @@ __all__ = [
     "ScenarioStatistics",
     "ScenarioValidationResponse",
     "ScenarioExecutionError",
+    # Scenario Item Profile schemas
+    "TargetObjectType",
+    "ScenarioItemProfileBase",
+    "ScenarioItemProfileCreate",
+    "ScenarioItemProfileUpdate",
+    "ScenarioItemProfileRead",
+    "ScenarioItemProfileSummary",
+    "ScenarioItemProfileBulkCreate",
+    "ScenarioItemProfileBulkResponse",
+    "ScenarioItemProfileQuery",
+    "ProfilesByTargetResponse",
+    "ProfileValidationResponse",
+    "ProfileComparisonResponse",
+    "ScenarioProfileApplicationResult",
+    "ScenarioItemProfileListResponse",
+    "ScenarioItemProfileExport",
+    "ScenarioItemProfileImport",
 ]
