@@ -272,3 +272,7 @@ class OrganizationRepository(BaseRepository[Organization]):
             List of recently created organizations ordered by creation date (newest first)
         """
         return self.get_recent(db=db, tenant_id=tenant_id, days=days, limit=limit)
+
+
+# Export repository instance
+organization_repo = OrganizationRepository()

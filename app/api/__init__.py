@@ -6,6 +6,7 @@ from app.api.routers.health import router as health_router
 from app.api.routers.organization import router as organization_router
 from app.api.routers.organization_membership import router as membership_router
 from app.api.routers.tenant import router as tenant_router
+from app.api.routers.models import router as models_router
 
 # Create main API router
 api_router = APIRouter(prefix="/api/v1")
@@ -21,6 +22,7 @@ api_router.include_router(organization_router, tags=["Organization Management"])
 
 api_router.include_router(membership_router, tags=["Organization Memberships"])
 
+api_router.include_router(models_router, tags=["Simulation Models"])
 
 api_router.include_router(health_router, tags=["System Health"])
 
@@ -38,6 +40,7 @@ async def api_info():
             "users": "/api/v1/users/",
             "organizations": "/api/v1/organizations/",
             "memberships": "/api/v1/memberships/",
+            "models": "/api/v1/models/",
             "tenants": "/api/v1/tenants/",
             "health": "/api/v1/health/",
         },

@@ -14,8 +14,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    DECIMAL
 )
-from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
+from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER, NVARCHAR
 from sqlalchemy.orm import relationship
 
 from app.db.models.base_entity import BaseEntity
@@ -30,28 +31,28 @@ class Model(BaseEntity):
     __tablename__ = "models"
 
     # Basic Information
-    name = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
+    name = Column(NVARCHAR(255), nullable=False)
+    description = Column(NVARCHAR(None), nullable=True)  # NVARCHAR(MAX)
 
     # Source Information
     source = Column(
-        String(50), nullable=False
-    )  # enum: 'lucidchart', 'miro', 'manual', 'import'
-    source_document_id = Column(String(255), nullable=True)
-    source_url = Column(Text, nullable=True)
+        NVARCHAR(50), nullable=False
+    )  # enum: 'lucidchart', 'standalone', 'miro'
+    source_document_id = Column(NVARCHAR(255), nullable=True)
+    source_url = Column(NVARCHAR(500), nullable=True)
 
     # Default Simulation Parameters
     reps = Column(Integer, nullable=False, default=1)
     forecast_days = Column(Integer, nullable=False, default=30)
     random_seed = Column(Integer, nullable=True)
     time_type = Column(
-        String(20), nullable=False, default="calendar"
-    )  # enum: 'calendar', 'clock'
+        NVARCHAR(20), nullable=False, default="clock"
+    )  # enum: 'clock', 'calendar'
     one_clock_unit = Column(
-        String(20), nullable=True
-    )  # enum: 'minutes', 'hours', 'days', 'weeks'
-    warmup_clock_period = Column(Integer, nullable=True)
-    run_clock_period = Column(Integer, nullable=True)
+        NVARCHAR(20), nullable=True
+    )  # enum: 'seconds', 'minutes', 'hours', 'days'
+    warmup_clock_period = Column(DECIMAL(18, 6), nullable=True)
+    run_clock_period = Column(DECIMAL(18, 6), nullable=True)
 
     # Date/Time Parameters
     warmup_date_time = Column(DateTime, nullable=True)
@@ -75,7 +76,7 @@ class Model(BaseEntity):
     version = Column(Integer, nullable=False, default=1)
 
     # Legacy
-    blob_storage_url = Column(Text, nullable=True)
+    blob_storage_url = Column(NVARCHAR(500), nullable=True)
 
     # Relationships
     created_by_user = relationship("User", back_populates="created_models")
@@ -86,14 +87,14 @@ class Model(BaseEntity):
     __table_args__ = (
         # Check constraints
         CheckConstraint(
-            "source IN ('lucidchart', 'miro', 'manual', 'import')",
+            "source IN ('lucidchart', 'standalone', 'miro')",
             name="ck_models_source",
         ),
         CheckConstraint(
-            "time_type IN ('calendar', 'clock')", name="ck_models_time_type"
+            "time_type IN ('clock', 'calendar')", name="ck_models_time_type"
         ),
         CheckConstraint(
-            "one_clock_unit IS NULL OR one_clock_unit IN ('minutes', 'hours', 'days', 'weeks')",
+            "one_clock_unit IS NULL OR one_clock_unit IN ('seconds', 'minutes', 'hours', 'days')",
             name="ck_models_one_clock_unit",
         ),
         CheckConstraint("reps >= 1", name="ck_models_reps_positive"),
